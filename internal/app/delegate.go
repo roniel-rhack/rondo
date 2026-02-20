@@ -59,18 +59,36 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	}
 	prioLabel := lipgloss.NewStyle().Foreground(prioColor).Render(t.Priority.Label())
 
+	// Recurring icon
+	recurIcon := ""
+	if t.RecurFreq != task.RecurNone {
+		recurIcon = lipgloss.NewStyle().Foreground(ui.Cyan).Render(" ↻")
+	}
+
+	// Blocked badge
+	blockedBadge := ""
+	if len(t.BlockedByIDs) > 0 {
+		blockedBadge = lipgloss.NewStyle().Foreground(ui.Red).Bold(true).Render(" [BLOCKED]")
+	}
+
 	// Title line
 	titleStyle := lipgloss.NewStyle().Foreground(ui.White)
 	if t.Status == task.Done {
 		titleStyle = titleStyle.Strikethrough(true).Foreground(ui.Gray)
 	}
 
-	line1 := fmt.Sprintf(" %s %s %s", statusIcon, prioLabel, titleStyle.Render(t.Title))
+	line1 := fmt.Sprintf(" %s %s %s%s%s", statusIcon, prioLabel, titleStyle.Render(t.Title), recurIcon, blockedBadge)
 
-	// Subtitle line: due date + subtask count
+	// Subtitle line: due date (with overdue styling) + subtask count
 	var subtitle string
 	if t.DueDate != nil {
-		subtitle += fmt.Sprintf("due %s", t.DueDate.Format("Jan 02"))
+		level := ui.DueStatus(*t.DueDate)
+		dueStr := fmt.Sprintf("due %s", t.DueDate.Format("Jan 02"))
+		badge := ui.DueBadge(level)
+		if badge != "" {
+			dueStr += " " + badge
+		}
+		subtitle += ui.DueStyle(level).Render(dueStr)
 	}
 	if len(t.Subtasks) > 0 {
 		done := 0
@@ -82,9 +100,9 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		if subtitle != "" {
 			subtitle += "  "
 		}
-		subtitle += fmt.Sprintf("[%d/%d]", done, len(t.Subtasks))
+		subtitle += lipgloss.NewStyle().Foreground(ui.Gray).Render(fmt.Sprintf("[%d/%d]", done, len(t.Subtasks)))
 	}
-	line2 := lipgloss.NewStyle().Foreground(ui.Gray).PaddingLeft(5).Render(subtitle)
+	line2 := lipgloss.NewStyle().PaddingLeft(5).Render(subtitle)
 
 	// Cursor / selection
 	if isSelected {

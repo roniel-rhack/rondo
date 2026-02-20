@@ -86,12 +86,42 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 	statusStr := t.Status.Icon() + " " + t.Status.String()
 	sections = append(sections, labelStyle.Render("Status")+statusStyle(t.Status).Render(statusStr))
 
+	// Blocked badge
+	if len(t.BlockedByIDs) > 0 {
+		blocked := task.IsBlocked(t.BlockedByIDs, func(id int64) task.Status {
+			// Default to Pending if we can't look up; the badge is informational.
+			return task.Pending
+		})
+		if blocked {
+			badge := lipgloss.NewStyle().Foreground(Red).Bold(true).Render(" [BLOCKED]")
+			sections[len(sections)-1] += badge
+		}
+	}
+
 	// Priority
 	sections = append(sections, labelStyle.Render("Priority")+prioStyle(t.Priority).Render(t.Priority.String()))
 
-	// Due date
+	// Due date with overdue badge
 	if t.DueDate != nil {
-		sections = append(sections, labelStyle.Render("Due")+valueStyle.Render(t.DueDate.Format("Jan 02, 2006")))
+		level := DueStatus(*t.DueDate)
+		dateStr := t.DueDate.Format("Jan 02, 2006")
+		badge := DueBadge(level)
+		if badge != "" {
+			dateStr += " " + DueStyle(level).Render(badge)
+		}
+		sections = append(sections, labelStyle.Render("Due")+DueStyle(level).Render(t.DueDate.Format("Jan 02, 2006")))
+		if badge != "" {
+			sections[len(sections)-1] = labelStyle.Render("Due") + DueStyle(level).Render(t.DueDate.Format("Jan 02, 2006")) + " " + DueStyle(level).Render(badge)
+		}
+	}
+
+	// Recurrence
+	if t.RecurFreq != task.RecurNone {
+		recurStr := "↻ " + t.RecurFreq.String()
+		if t.RecurInterval > 1 {
+			recurStr += fmt.Sprintf(" (every %d)", t.RecurInterval)
+		}
+		sections = append(sections, labelStyle.Render("Recurrence")+valueStyle.Render(recurStr))
 	}
 
 	// Created
@@ -103,11 +133,19 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 		sections = append(sections, labelStyle.Render("Tags")+valueStyle.Render(tagStr))
 	}
 
-	// Description
+	// Time logged
+	if len(t.TimeLogs) > 0 {
+		total := task.TotalDuration(t.TimeLogs)
+		timeStr := task.FormatDuration(total)
+		timeStr += fmt.Sprintf(" (%d entries)", len(t.TimeLogs))
+		sections = append(sections, labelStyle.Render("Time Logged")+valueStyle.Render(timeStr))
+	}
+
+	// Description (rendered as markdown)
 	if t.Description != "" {
 		sections = append(sections, "")
 		sections = append(sections, labelStyle.Render("Description"))
-		sections = append(sections, valueStyle.Render(t.Description))
+		sections = append(sections, RenderMarkdown(t.Description, width-2))
 	}
 
 	// Subtasks
@@ -173,7 +211,7 @@ func RenderJournalDetail(note *journal.Note, width int, entryIdx int, detailFocu
 			}
 			timestamp := prefix + lipgloss.NewStyle().Bold(true).Foreground(Cyan).Render(entry.CreatedAt.Format("3:04 PM"))
 			sections = append(sections, timestamp)
-			sections = append(sections, lipgloss.NewStyle().Foreground(White).Render("  "+entry.Body))
+			sections = append(sections, "  "+RenderMarkdown(entry.Body, width-4))
 			if i < len(note.Entries)-1 {
 				sections = append(sections, "")
 				sections = append(sections, separator)
@@ -204,7 +242,9 @@ func renderProgressBar(done, total, width int) string {
 // RenderStatusBar renders the bottom status bar.
 // focusedPanel: 0=list, 1=detail. Key hints adapt to the focused panel context.
 // activeTab: 0-2 for task tabs, 3 for journal tab.
-func RenderStatusBar(total, done, active int, width int, statusMsg string, focusedPanel int, activeTab int) string {
+// timerStr: optional focus timer string (e.g. "🍅 12:34") shown when non-empty.
+// undoAvailable: whether an undo action is available.
+func RenderStatusBar(total, done, active int, width int, statusMsg string, focusedPanel int, activeTab int, timerStr string, undoAvailable bool) string {
 	keyStyle := lipgloss.NewStyle().Foreground(Cyan)
 	dimStyle := lipgloss.NewStyle().Foreground(Gray)
 	panelStyle := lipgloss.NewStyle().Foreground(Cyan).Bold(true)
@@ -219,8 +259,12 @@ func RenderStatusBar(total, done, active int, width int, statusMsg string, focus
 			}
 			left = lipgloss.NewStyle().Foreground(color).Bold(true).Render(" " + statusMsg)
 		} else {
-			// total = noteCount, done = todayEntryCount when called from journal context.
 			left = dimStyle.Render(fmt.Sprintf(" %d notes | %d entries today", total, done))
+		}
+
+		// Focus timer.
+		if timerStr != "" {
+			left += "  " + lipgloss.NewStyle().Foreground(Red).Bold(true).Render(timerStr)
 		}
 
 		var panelLabel string
@@ -239,6 +283,9 @@ func RenderStatusBar(total, done, active int, width int, statusMsg string, focus
 			bindings = []struct{ key, desc string }{
 				{"a", "add"}, {"h", "hide"}, {"H", "show hidden"}, {"/", "find"}, {"?", "help"},
 			}
+		}
+		if undoAvailable {
+			bindings = append(bindings, struct{ key, desc string }{"^Z", "undo"})
 		}
 
 		var parts []string
@@ -267,6 +314,11 @@ func RenderStatusBar(total, done, active int, width int, statusMsg string, focus
 		left = dimStyle.Render(fmt.Sprintf(" %d tasks | %d done | %d active", total, done, active))
 	}
 
+	// Focus timer.
+	if timerStr != "" {
+		left += "  " + lipgloss.NewStyle().Foreground(Red).Bold(true).Render(timerStr)
+	}
+
 	// Panel indicator.
 	var panelLabel string
 	if focusedPanel == 1 {
@@ -280,14 +332,18 @@ func RenderStatusBar(total, done, active int, width int, statusMsg string, focus
 	if focusedPanel == 1 {
 		bindings = []struct{ key, desc string }{
 			{"a", "add"}, {"e", "edit"}, {"d", "del"}, {"s", "toggle"},
-			{"j/k", "nav"}, {"?", "help"},
+			{"l", "log"}, {"b", "blockers"}, {"j/k", "nav"}, {"?", "help"},
 		}
 	} else {
 		bindings = []struct{ key, desc string }{
 			{"a", "add"}, {"e", "edit"}, {"d", "del"}, {"s", "status"},
-			{"/", "find"}, {"?", "help"},
+			{"p", "focus"}, {"X", "export"}, {"/", "find"}, {"?", "help"},
 		}
 	}
+	if undoAvailable {
+		bindings = append(bindings, struct{ key, desc string }{"^Z", "undo"})
+	}
+
 	var parts []string
 	parts = append(parts, panelLabel)
 	for _, b := range bindings {
@@ -300,6 +356,33 @@ func RenderStatusBar(total, done, active int, width int, statusMsg string, focus
 		return left
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+// RenderTagBar renders a horizontal tag filter bar.
+func RenderTagBar(tags []string, activeTag string, width int) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	tagNormal := lipgloss.NewStyle().Foreground(Gray).Padding(0, 1)
+	tagActive := lipgloss.NewStyle().Foreground(Cyan).Bold(true).Reverse(true).Padding(0, 1)
+
+	var rendered []string
+	allLabel := "All"
+	if activeTag == "" {
+		rendered = append(rendered, tagActive.Render(allLabel))
+	} else {
+		rendered = append(rendered, tagNormal.Render(allLabel))
+	}
+	for _, tag := range tags {
+		if tag == activeTag {
+			rendered = append(rendered, tagActive.Render(tag))
+		} else {
+			rendered = append(rendered, tagNormal.Render(tag))
+		}
+	}
+
+	row := lipgloss.JoinHorizontal(lipgloss.Center, rendered...)
+	return lipgloss.NewStyle().Width(width).Render(row)
 }
 
 // RenderConfirmDialogBox renders a yes/no confirmation dialog box (without placement).

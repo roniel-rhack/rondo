@@ -46,17 +46,66 @@ func migrate(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tags_task ON tags(task_id)`,
+		`CREATE TABLE IF NOT EXISTS time_logs (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id   INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			duration  INTEGER NOT NULL,
+			note      TEXT NOT NULL DEFAULT '',
+			logged_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_time_logs_task ON time_logs(task_id)`,
+		`CREATE TABLE IF NOT EXISTS task_dependencies (
+			task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			blocked_by INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			PRIMARY KEY (task_id, blocked_by)
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+
+	// Add new columns to tasks table if they don't already exist.
+	if err := addColumnIfNotExists(db, "tasks", "recur_freq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate recur_freq: %w", err)
+	}
+	if err := addColumnIfNotExists(db, "tasks", "recur_interval", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate recur_interval: %w", err)
+	}
 	return nil
 }
 
+func addColumnIfNotExists(db *sql.DB, table, column, colDef string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // column already exists
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colDef))
+	return err
+}
+
 func (s *Store) List() ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, title, description, status, priority, due_date, created_at, updated_at FROM tasks ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, title, description, status, priority, due_date, created_at, updated_at, recur_freq, recur_interval FROM tasks ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +115,7 @@ func (s *Store) List() ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var dueDate, createdAt, updatedAt sql.NullString
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority, &dueDate, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority, &dueDate, &createdAt, &updatedAt, &t.RecurFreq, &t.RecurInterval); err != nil {
 			return nil, err
 		}
 		if dueDate.Valid {
@@ -92,6 +141,9 @@ func (s *Store) List() ([]Task, error) {
 		}
 		tasks = append(tasks, t)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	for i := range tasks {
 		if tasks[i].Subtasks, err = s.listSubtasks(tasks[i].ID); err != nil {
@@ -100,8 +152,14 @@ func (s *Store) List() ([]Task, error) {
 		if tasks[i].Tags, err = s.listTags(tasks[i].ID); err != nil {
 			return nil, fmt.Errorf("list tags for task %d: %w", tasks[i].ID, err)
 		}
+		if tasks[i].TimeLogs, err = s.ListTimeLogs(tasks[i].ID); err != nil {
+			return nil, fmt.Errorf("list time logs for task %d: %w", tasks[i].ID, err)
+		}
+		if tasks[i].BlockedByIDs, err = s.ListBlockerIDs(tasks[i].ID); err != nil {
+			return nil, fmt.Errorf("list blocker ids for task %d: %w", tasks[i].ID, err)
+		}
 	}
-	return tasks, rows.Err()
+	return tasks, nil
 }
 
 func (s *Store) listSubtasks(taskID int64) ([]Subtask, error) {
@@ -241,4 +299,169 @@ func (s *Store) UpdateSubtask(id int64, title string) error {
 func (s *Store) DeleteSubtask(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM subtasks WHERE id = ?`, id)
 	return err
+}
+
+// AddTimeLog records a time log entry for the given task.
+func (s *Store) AddTimeLog(taskID int64, duration time.Duration, note string) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`INSERT INTO time_logs (task_id, duration, note, logged_at) VALUES (?,?,?,?)`,
+		taskID, int64(duration), note, now,
+	)
+	return err
+}
+
+// ListTimeLogs returns all time logs for a task, ordered by logged_at descending.
+func (s *Store) ListTimeLogs(taskID int64) ([]TimeLog, error) {
+	rows, err := s.db.Query(
+		`SELECT id, task_id, duration, note, logged_at FROM time_logs WHERE task_id = ? ORDER BY logged_at DESC`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var logs []TimeLog
+	for rows.Next() {
+		var tl TimeLog
+		var dur int64
+		var loggedAt string
+		if err := rows.Scan(&tl.ID, &tl.TaskID, &dur, &tl.Note, &loggedAt); err != nil {
+			return nil, err
+		}
+		tl.Duration = time.Duration(dur)
+		parsed, err := time.Parse(time.RFC3339, loggedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse time_log logged_at %q: %w", loggedAt, err)
+		}
+		tl.LoggedAt = parsed
+		logs = append(logs, tl)
+	}
+	return logs, rows.Err()
+}
+
+// SetBlocker adds a dependency: taskID is blocked by blockerID.
+func (s *Store) SetBlocker(taskID, blockerID int64) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO task_dependencies (task_id, blocked_by) VALUES (?,?)`,
+		taskID, blockerID,
+	)
+	return err
+}
+
+// RemoveBlocker removes a dependency: taskID is no longer blocked by blockerID.
+func (s *Store) RemoveBlocker(taskID, blockerID int64) error {
+	_, err := s.db.Exec(
+		`DELETE FROM task_dependencies WHERE task_id = ? AND blocked_by = ?`,
+		taskID, blockerID,
+	)
+	return err
+}
+
+// ListBlockerIDs returns all task IDs that block the given task.
+func (s *Store) ListBlockerIDs(taskID int64) ([]int64, error) {
+	rows, err := s.db.Query(
+		`SELECT blocked_by FROM task_dependencies WHERE task_id = ?`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// UpdateRecurrence sets the recurrence frequency and interval for a task.
+func (s *Store) UpdateRecurrence(taskID int64, freq RecurFreq, interval int) error {
+	_, err := s.db.Exec(
+		`UPDATE tasks SET recur_freq = ?, recur_interval = ? WHERE id = ?`,
+		int(freq), interval, taskID,
+	)
+	return err
+}
+
+// Restore re-inserts a previously deleted task with its tags.
+func (s *Store) Restore(t *Task) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var dueStr *string
+	if t.DueDate != nil {
+		d := t.DueDate.Format(time.DateOnly)
+		dueStr = &d
+	}
+	res, err := tx.Exec(
+		`INSERT INTO tasks (title, description, status, priority, due_date, created_at, updated_at, recur_freq, recur_interval) VALUES (?,?,?,?,?,?,?,?,?)`,
+		t.Title, t.Description, t.Status, t.Priority, dueStr,
+		t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339),
+		int(t.RecurFreq), t.RecurInterval,
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	t.ID = id
+
+	if err := saveTagsTx(tx, t.ID, t.Tags); err != nil {
+		return err
+	}
+	for _, st := range t.Subtasks {
+		if _, err := tx.Exec(
+			`INSERT INTO subtasks (task_id, title, completed, position) VALUES (?,?,?,?)`,
+			t.ID, st.Title, st.Completed, st.Position,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// RestoreSubtask re-inserts a previously deleted subtask.
+func (s *Store) RestoreSubtask(taskID int64, title string, completed bool, position int) error {
+	_, err := s.db.Exec(
+		`INSERT INTO subtasks (task_id, title, completed, position) VALUES (?,?,?,?)`,
+		taskID, title, completed, position,
+	)
+	return err
+}
+
+// GetByID retrieves a single task by ID.
+func (s *Store) GetByID(id int64) (*Task, error) {
+	var t Task
+	var dueDate, createdAt, updatedAt sql.NullString
+	err := s.db.QueryRow(
+		`SELECT id, title, description, status, priority, due_date, created_at, updated_at, recur_freq, recur_interval FROM tasks WHERE id = ?`, id,
+	).Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority, &dueDate, &createdAt, &updatedAt, &t.RecurFreq, &t.RecurInterval)
+	if err != nil {
+		return nil, err
+	}
+	if dueDate.Valid {
+		d, _ := time.ParseInLocation(time.DateOnly, dueDate.String, time.Local)
+		t.DueDate = &d
+	}
+	if createdAt.Valid {
+		t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
+	}
+	if updatedAt.Valid {
+		t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+	}
+	t.Subtasks, _ = s.listSubtasks(t.ID)
+	t.Tags, _ = s.listTags(t.ID)
+	t.TimeLogs, _ = s.ListTimeLogs(t.ID)
+	t.BlockedByIDs, _ = s.ListBlockerIDs(t.ID)
+	return &t, nil
 }

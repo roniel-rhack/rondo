@@ -259,6 +259,16 @@ func (m *Model) updateJournalConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			return m, m.setStatus("No entry selected")
 		}
 		entry := note.Entries[m.entryIdx]
+		// Capture for undo.
+		noteID := note.ID
+		entryBody := entry.Body
+		entryCreatedAt := entry.CreatedAt
+		m.undoAction = &undoAction{
+			description: "Undo delete journal entry",
+			undo: func() error {
+				return m.journalStore.RestoreEntry(noteID, entryBody, entryCreatedAt)
+			},
+		}
 		if err := m.journalStore.DeleteEntry(entry.ID); err != nil {
 			m.mode = modeNormal
 			return m, m.setError(err)
@@ -356,7 +366,7 @@ func (m *Model) updateJournalDetail() {
 func (m Model) viewJournal(header string) string {
 	contentHeight := m.height - lipgloss.Height(header) - 1
 
-	listWidth := m.width * 2 / 5
+	listWidth := int(float64(m.width) * m.panelRatio)
 	detailWidth := m.width - listWidth
 
 	var listContent string
@@ -402,7 +412,8 @@ func (m Model) viewJournal(header string) string {
 			break
 		}
 	}
-	statusBar := ui.RenderStatusBar(noteCount, todayEntryCount, 0, m.width, m.statusMsg, m.focusedPanel, 3)
+	timerStr := m.focusTimerStr()
+	statusBar := ui.RenderStatusBar(noteCount, todayEntryCount, 0, m.width, m.statusMsg, m.focusedPanel, 3, timerStr, m.undoAction != nil)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, content, statusBar)
 }
@@ -416,6 +427,7 @@ func (m Model) renderJournalHelpOverlay() string {
 		{"Esc", "Back to list / clear filter"},
 		{"j/k", "Navigate items"},
 		{"Tab", "Switch tab"},
+		{"< / >", "Resize panels"},
 		{"", ""},
 		{"", "1: Notes (list focused):"},
 		{"a", "Add entry (today)"},
@@ -428,6 +440,12 @@ func (m Model) renderJournalHelpOverlay() string {
 		{"e", "Edit selected entry"},
 		{"d", "Delete selected entry"},
 		{"j/k", "Navigate entries"},
+		{"", ""},
+		{"", "Global:"},
+		{"p", "Start/cancel focus timer"},
+		{"X", "Export tasks"},
+		{"G", "Statistics dashboard"},
+		{"Ctrl+Z", "Undo last action"},
 		{"", ""},
 		{"?", "Toggle this help"},
 		{"q", "Quit"},
@@ -513,6 +531,22 @@ func (m Model) renderJournalOverlays(view string) string {
 	case modeHelp:
 		helpView := m.renderJournalHelpOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpView,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+
+	case modeStats:
+		statsView := m.renderStatsOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, statsView,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+
+	case modeFocusConfirmCancel:
+		remaining := ""
+		if m.focusSession != nil {
+			remaining = fmt.Sprintf("%s remaining", m.focusSession.Remaining(time.Now()).Round(time.Second))
+		}
+		dialog := ui.RenderConfirmDialogBox("Cancel Focus?", fmt.Sprintf("Cancel session with %s?", remaining), ui.Yellow)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
 			lipgloss.WithWhitespaceChars(" "),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
 	}

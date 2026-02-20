@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +16,9 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/roniel/todo-app/internal/config"
+	"github.com/roniel/todo-app/internal/export"
+	"github.com/roniel/todo-app/internal/focus"
 	"github.com/roniel/todo-app/internal/journal"
 	"github.com/roniel/todo-app/internal/task"
 	"github.com/roniel/todo-app/internal/ui"
@@ -34,6 +39,12 @@ const (
 	modeJournalEdit
 	modeJournalConfirmHide
 	modeJournalConfirmDelete
+	modeExport
+	modeTimeLog
+	modeFocusConfirmCancel
+	modeTagFilter
+	modeStats
+	modeBlockerPicker
 )
 
 const tabCount = 4
@@ -45,6 +56,26 @@ const (
 	sortDue
 	sortPriority
 )
+
+// undoAction stores a reversible action.
+type undoAction struct {
+	description string
+	undo        func() error
+}
+
+// statsData holds computed statistics for the stats overlay.
+type statsData struct {
+	totalTasks    int
+	doneTasks     int
+	activeTasks   int
+	lowCount      int
+	medCount      int
+	highCount     int
+	urgentCount   int
+	tagCounts     map[string]int
+	focusToday    int
+	journalStreak string
+}
 
 // Model is the top-level Bubbletea model for the todo application.
 type Model struct {
@@ -65,6 +96,31 @@ type Model struct {
 	showHidden      bool
 	entryIdx        int
 
+	// Config + panel resize.
+	cfg        config.Config
+	panelRatio float64
+
+	// Export.
+	exportFormData *ui.ExportFormData
+
+	// Time log.
+	timeLogFormData *ui.TimeLogFormData
+
+	// Focus timer.
+	focusStore   *focus.Store
+	focusSession *focus.Session
+	focusActive  bool
+
+	// Tag filter.
+	activeTag     string
+	tagBarVisible bool
+
+	// Undo.
+	undoAction *undoAction
+
+	// Stats.
+	stats *statsData
+
 	mode         mode
 	activeTab    int // 0=All, 1=Active, 2=Done, 3=Journal
 	focusedPanel int // 0=list, 1=detail
@@ -84,6 +140,13 @@ type tasksLoaded struct {
 
 type clearStatusMsg struct{}
 
+type focusTickMsg time.Time
+
+type exportDoneMsg struct {
+	path string
+	err  error
+}
+
 func (m *Model) setStatus(msg string) tea.Cmd {
 	m.statusMsg = msg
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
@@ -99,7 +162,7 @@ func (m *Model) setError(err error) tea.Cmd {
 }
 
 // New creates a new Model backed by the given stores.
-func New(store *task.Store, journalStore *journal.Store) Model {
+func New(store *task.Store, journalStore *journal.Store, focusStore *focus.Store, cfg config.Config) Model {
 	delegate := newTaskDelegate()
 	l := list.New(nil, delegate, 0, 0)
 	l.SetShowTitle(false)
@@ -123,14 +186,17 @@ func New(store *task.Store, journalStore *journal.Store) Model {
 	h := help.New()
 
 	return Model{
-		store:           store,
-		journalStore:    journalStore,
-		list:            l,
-		journalList:     jl,
-		viewport:        vp,
+		store:        store,
+		journalStore: journalStore,
+		focusStore:   focusStore,
+		cfg:          cfg,
+		panelRatio:   cfg.PanelRatio,
+		list:         l,
+		journalList:  jl,
+		viewport:     vp,
 		journalViewport: jvp,
-		help:            h,
-		activeTab:       1, // Default to Active tab
+		help:         h,
+		activeTab:    1, // Default to Active tab
 	}
 }
 
@@ -156,6 +222,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeJournalAdd || m.mode == modeJournalEdit {
 		return m.updateJournalForm(msg)
+	}
+	if m.mode == modeExport {
+		return m.updateExportForm(msg)
+	}
+	if m.mode == modeTimeLog {
+		return m.updateTimeLogForm(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -183,6 +255,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, nil
 
+	case focusTickMsg:
+		if !m.focusActive || m.focusSession == nil {
+			return m, nil
+		}
+		now := time.Now()
+		remaining := m.focusSession.Remaining(now)
+		if remaining <= 0 {
+			// Session complete.
+			if err := m.focusStore.Complete(m.focusSession.ID); err != nil {
+				return m, m.setError(err)
+			}
+			m.focusActive = false
+			m.focusSession = nil
+			return m, m.setStatus("Focus session complete!")
+		}
+		return m, focusTick()
+
+	case exportDoneMsg:
+		if msg.err != nil {
+			return m, m.setError(msg.err)
+		}
+		return m, m.setStatus("Exported to " + msg.path)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -204,8 +299,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeJournalConfirmDelete {
 			return m.updateJournalConfirmDelete(msg)
 		}
+		if m.mode == modeFocusConfirmCancel {
+			return m.updateFocusConfirmCancel(msg)
+		}
+		if m.mode == modeTagFilter {
+			return m.updateTagFilter(msg)
+		}
+		if m.mode == modeBlockerPicker {
+			return m.updateBlockerPicker(msg)
+		}
 		if m.mode == modeHelp {
 			if msg.String() == "esc" || msg.String() == "?" || msg.String() == "q" {
+				m.mode = modeNormal
+				return m, nil
+			}
+			return m, nil
+		}
+		if m.mode == modeStats {
+			if msg.String() == "esc" || msg.String() == "G" || msg.String() == "q" {
 				m.mode = modeNormal
 				return m, nil
 			}
@@ -221,6 +332,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Tab):
 			m.switchTab()
+			return m, nil
+		case key.Matches(msg, keys.Undo):
+			return m.handleUndo()
+		case key.Matches(msg, keys.Export):
+			m.exportFormData = &ui.ExportFormData{Format: "md"}
+			m.form = ui.ExportForm(m.exportFormData)
+			m.mode = modeExport
+			return m, m.form.Init()
+		case key.Matches(msg, keys.Focus):
+			return m.handleFocusToggle()
+		case key.Matches(msg, keys.Stats):
+			m.computeStats()
+			m.mode = modeStats
+			return m, nil
+		case key.Matches(msg, keys.PanelWider):
+			if m.panelRatio < 0.8 {
+				m.panelRatio += 0.05
+				m.resizeComponents()
+				m.updateDetail()
+			}
+			return m, nil
+		case key.Matches(msg, keys.PanelNarrower):
+			if m.panelRatio > 0.2 {
+				m.panelRatio -= 0.05
+				m.resizeComponents()
+				m.updateDetail()
+			}
+			return m, nil
+		case key.Matches(msg, keys.TagBar):
+			if m.activeTab != 3 {
+				m.tagBarVisible = !m.tagBarVisible
+				m.activeTag = ""
+				m.resizeComponents()
+				m.refreshList()
+				m.updateDetail()
+			}
 			return m, nil
 		}
 
@@ -320,6 +467,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.setStatus("Subtask toggled")
 				}
 				return m, nil
+			case key.Matches(msg, keys.TimeLog):
+				if selected != nil {
+					m.timeLogFormData = &ui.TimeLogFormData{}
+					m.form = ui.TimeLogForm(m.timeLogFormData)
+					m.mode = modeTimeLog
+					return m, m.form.Init()
+				}
+				return m, nil
+			case key.Matches(msg, keys.Blocker):
+				if selected != nil {
+					m.mode = modeBlockerPicker
+				}
+				return m, nil
 			}
 			// Other keys (q, ?, Tab, /, F1-F3) fall through to normal handling.
 		}
@@ -327,7 +487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Normal mode keybindings (list panel focused).
 		switch {
 		case key.Matches(msg, keys.Add):
-			m.formData = &ui.TaskFormData{Priority: task.Medium}
+			m.formData = &ui.TaskFormData{Priority: task.Medium, RecurFreq: "none"}
 			m.form = ui.NewTaskForm(m.formData)
 			m.mode = modeAdd
 			return m, m.form.Init()
@@ -341,12 +501,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if selected.DueDate != nil {
 				dueStr = selected.DueDate.Format(time.DateOnly)
 			}
+			recurFreq := selected.RecurFreq.String()
 			m.formData = &ui.TaskFormData{
 				Title:       selected.Title,
 				Description: selected.Description,
 				Priority:    selected.Priority,
 				DueDate:     dueStr,
 				Tags:        strings.Join(selected.Tags, ", "),
+				RecurFreq:   recurFreq,
 			}
 			m.form = ui.EditTaskForm(m.formData)
 			m.mode = modeEdit
@@ -361,9 +523,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Status):
 			selected := m.selectedTask()
 			if selected != nil {
+				oldStatus := selected.Status
 				selected.Status = selected.Status.Next()
+
+				// Handle recurring tasks: when completing, create next occurrence.
+				if selected.Status == task.Done && selected.RecurFreq != task.RecurNone {
+					nextDue := task.NextDueDate(*selected)
+					newTask := &task.Task{
+						Title:         selected.Title,
+						Description:   selected.Description,
+						Priority:      selected.Priority,
+						DueDate:       &nextDue,
+						Tags:          selected.Tags,
+						RecurFreq:     selected.RecurFreq,
+						RecurInterval: selected.RecurInterval,
+					}
+					if err := m.store.Create(newTask); err != nil {
+						return m, m.setError(err)
+					}
+				}
+
 				if err := m.store.Update(selected); err != nil {
 					return m, m.setError(err)
+				}
+				// Capture undo for status change.
+				taskID := selected.ID
+				m.undoAction = &undoAction{
+					description: fmt.Sprintf("Undo status change on %q", selected.Title),
+					undo: func() error {
+						t, err := m.store.GetByID(taskID)
+						if err != nil {
+							return err
+						}
+						t.Status = oldStatus
+						return m.store.Update(t)
+					},
 				}
 				if err := m.reload(); err != nil {
 					return m, m.setError(err)
@@ -489,11 +683,99 @@ func (m *Model) updateFormMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) updateExportForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if wsm, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wsm.Width
+		m.height = wsm.Height
+		m.resizeComponents()
+	}
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
+		m.mode = modeNormal
+		m.form = nil
+		m.exportFormData = nil
+		return m, nil
+	}
+
+	form, cmd := m.form.Update(msg)
+	if f, ok := form.(*huh.Form); ok {
+		m.form = f
+		if m.form.State == huh.StateCompleted {
+			data := m.exportFormData
+			m.mode = modeNormal
+			m.form = nil
+			m.exportFormData = nil
+			return m, m.runExport(data)
+		}
+		if m.form.State == huh.StateAborted {
+			m.mode = modeNormal
+			m.form = nil
+			m.exportFormData = nil
+			return m, nil
+		}
+	}
+	return m, cmd
+}
+
+func (m *Model) updateTimeLogForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if wsm, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wsm.Width
+		m.height = wsm.Height
+		m.resizeComponents()
+	}
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
+		m.mode = modeNormal
+		m.form = nil
+		m.timeLogFormData = nil
+		return m, nil
+	}
+
+	form, cmd := m.form.Update(msg)
+	if f, ok := form.(*huh.Form); ok {
+		m.form = f
+		if m.form.State == huh.StateCompleted {
+			selected := m.selectedTask()
+			if selected != nil && m.timeLogFormData != nil {
+				dur, err := task.ParseDuration(m.timeLogFormData.Duration)
+				if err == nil {
+					if err := m.store.AddTimeLog(selected.ID, dur, m.timeLogFormData.Note); err != nil {
+						m.mode = modeNormal
+						m.form = nil
+						m.timeLogFormData = nil
+						return m, m.setError(err)
+					}
+				}
+			}
+			m.mode = modeNormal
+			m.form = nil
+			m.timeLogFormData = nil
+			if err := m.reload(); err != nil {
+				return m, m.setError(err)
+			}
+			return m, m.setStatus("Time logged")
+		}
+		if m.form.State == huh.StateAborted {
+			m.mode = modeNormal
+			m.form = nil
+			m.timeLogFormData = nil
+			return m, nil
+		}
+	}
+	return m, cmd
+}
+
 func (m *Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		selected := m.selectedTask()
 		if selected != nil {
+			// Capture for undo.
+			deletedTask := *selected
+			m.undoAction = &undoAction{
+				description: fmt.Sprintf("Undo delete %q", deletedTask.Title),
+				undo: func() error {
+					return m.store.Restore(&deletedTask)
+				},
+			}
 			if err := m.store.Delete(selected.ID); err != nil {
 				return m, m.setError(err)
 			}
@@ -516,6 +798,17 @@ func (m *Model) updateConfirmDeleteSubtask(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		selected := m.selectedTask()
 		if selected != nil && m.subtaskIdx >= 0 && m.subtaskIdx < len(selected.Subtasks) {
 			st := selected.Subtasks[m.subtaskIdx]
+			// Capture for undo.
+			taskID := selected.ID
+			stTitle := st.Title
+			stCompleted := st.Completed
+			stPosition := st.Position
+			m.undoAction = &undoAction{
+				description: fmt.Sprintf("Undo delete subtask %q", stTitle),
+				undo: func() error {
+					return m.store.RestoreSubtask(taskID, stTitle, stCompleted, stPosition)
+				},
+			}
 			if err := m.store.DeleteSubtask(st.ID); err != nil {
 				m.mode = modeNormal
 				return m, m.setError(err)
@@ -534,6 +827,188 @@ func (m *Model) updateConfirmDeleteSubtask(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		m.mode = modeNormal
 	}
 	return m, nil
+}
+
+func (m *Model) updateFocusConfirmCancel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		m.focusActive = false
+		m.focusSession = nil
+		m.mode = modeNormal
+		return m, m.setStatus("Focus session cancelled")
+	case "n", "N", "esc":
+		m.mode = modeNormal
+	}
+	return m, nil
+}
+
+func (m *Model) updateTagFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	tags := m.allTags()
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		return m, nil
+	case "enter":
+		m.mode = modeNormal
+		m.refreshList()
+		m.updateDetail()
+		return m, nil
+	case "j", "right", "l":
+		// Cycle forward through tags.
+		if m.activeTag == "" {
+			if len(tags) > 0 {
+				m.activeTag = tags[0]
+			}
+		} else {
+			for i, t := range tags {
+				if t == m.activeTag {
+					if i+1 < len(tags) {
+						m.activeTag = tags[i+1]
+					} else {
+						m.activeTag = "" // Wrap to "All"
+					}
+					break
+				}
+			}
+		}
+		m.refreshList()
+		m.updateDetail()
+		return m, nil
+	case "k", "left", "h":
+		// Cycle backward through tags.
+		if m.activeTag == "" {
+			if len(tags) > 0 {
+				m.activeTag = tags[len(tags)-1]
+			}
+		} else {
+			for i, t := range tags {
+				if t == m.activeTag {
+					if i-1 >= 0 {
+						m.activeTag = tags[i-1]
+					} else {
+						m.activeTag = "" // Wrap to "All"
+					}
+					break
+				}
+			}
+		}
+		m.refreshList()
+		m.updateDetail()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) updateBlockerPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Simple blocker management: show info + toggle.
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) handleUndo() (tea.Model, tea.Cmd) {
+	if m.undoAction == nil {
+		return m, m.setStatus("Nothing to undo")
+	}
+	action := m.undoAction
+	m.undoAction = nil
+	if err := action.undo(); err != nil {
+		return m, m.setError(err)
+	}
+	if err := m.reload(); err != nil {
+		return m, m.setError(err)
+	}
+	if err := m.reloadJournal(); err != nil {
+		return m, m.setError(err)
+	}
+	return m, m.setStatus("Undone: " + action.description)
+}
+
+func (m *Model) handleFocusToggle() (tea.Model, tea.Cmd) {
+	if m.focusActive {
+		m.mode = modeFocusConfirmCancel
+		return m, nil
+	}
+	// Start a new focus session.
+	var taskID int64
+	if sel := m.selectedTask(); sel != nil {
+		taskID = sel.ID
+	}
+	session := &focus.Session{
+		TaskID:    taskID,
+		Duration:  focus.DefaultDuration,
+		StartedAt: time.Now(),
+	}
+	if err := m.focusStore.Create(session); err != nil {
+		return m, m.setError(err)
+	}
+	m.focusSession = session
+	m.focusActive = true
+	return m, tea.Batch(
+		m.setStatus("Focus session started (25 min)"),
+		focusTick(),
+	)
+}
+
+func focusTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return focusTickMsg(t)
+	})
+}
+
+func (m *Model) runExport(data *ui.ExportFormData) tea.Cmd {
+	return func() tea.Msg {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return exportDoneMsg{err: err}
+		}
+		dir := filepath.Join(home, ".todo-app", "exports")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return exportDoneMsg{err: err}
+		}
+
+		ext := "md"
+		if data.Format == "json" {
+			ext = "json"
+		}
+		filename := fmt.Sprintf("export-%s.%s", time.Now().Format("2006-01-02"), ext)
+		path := filepath.Join(dir, filename)
+
+		f, err := os.Create(path)
+		if err != nil {
+			return exportDoneMsg{err: err}
+		}
+		defer f.Close()
+
+		tasks, err := m.store.List()
+		if err != nil {
+			return exportDoneMsg{err: err}
+		}
+
+		if data.Format == "json" {
+			var notes []journal.Note
+			if data.IncludeJournal {
+				notes, _ = m.journalStore.ListNotes(true)
+			}
+			err = export.WriteJSON(f, tasks, notes)
+		} else {
+			err = export.WriteTasks(f, tasks)
+			if err == nil && data.IncludeJournal {
+				notes, _ := m.journalStore.ListNotes(true)
+				_, err = f.WriteString("\n---\n\n")
+				if err == nil {
+					err = export.WriteNotes(f, notes)
+				}
+			}
+		}
+		if err != nil {
+			return exportDoneMsg{err: err}
+		}
+		return exportDoneMsg{path: path}
+	}
 }
 
 func (m *Model) submitTaskForm() tea.Cmd {
@@ -558,18 +1033,25 @@ func (m *Model) submitTaskForm() tea.Cmd {
 		}
 	}
 
+	recurFreq := task.ParseRecurFreq(m.formData.RecurFreq)
+
 	var statusCmd tea.Cmd
 	if m.mode == modeAdd {
 		t := &task.Task{
-			Title:       m.formData.Title,
-			Description: m.formData.Description,
-			Priority:    m.formData.Priority,
-			DueDate:     dueDate,
-			Tags:        tags,
+			Title:         m.formData.Title,
+			Description:   m.formData.Description,
+			Priority:      m.formData.Priority,
+			DueDate:       dueDate,
+			Tags:          tags,
+			RecurFreq:     recurFreq,
+			RecurInterval: 1,
 		}
 		if err := m.store.Create(t); err != nil {
 			statusCmd = m.setError(err)
 		} else {
+			if recurFreq != task.RecurNone {
+				_ = m.store.UpdateRecurrence(t.ID, recurFreq, 1)
+			}
 			statusCmd = m.setStatus("Task created")
 		}
 	} else if m.mode == modeEdit {
@@ -580,9 +1062,14 @@ func (m *Model) submitTaskForm() tea.Cmd {
 			selected.Priority = m.formData.Priority
 			selected.DueDate = dueDate
 			selected.Tags = tags
+			selected.RecurFreq = recurFreq
+			if recurFreq != task.RecurNone && selected.RecurInterval == 0 {
+				selected.RecurInterval = 1
+			}
 			if err := m.store.Update(selected); err != nil {
 				statusCmd = m.setError(err)
 			} else {
+				_ = m.store.UpdateRecurrence(selected.ID, recurFreq, selected.RecurInterval)
 				statusCmd = m.setStatus("Task updated")
 			}
 		}
@@ -602,7 +1089,6 @@ func (m Model) View() string {
 	if !m.ready {
 		return "Loading..."
 	}
-	// Errors are shown inline via statusMsg, not here.
 
 	// Calculate counts.
 	allCount := len(m.tasks)
@@ -626,11 +1112,20 @@ func (m Model) View() string {
 		return m.renderJournalOverlays(view)
 	}
 
+	// Tag bar (optional, between header and content).
+	var tagBar string
+	if m.tagBarVisible {
+		tagBar = ui.RenderTagBar(m.allTags(), m.activeTag, m.width)
+	}
+
 	// Content area height.
 	contentHeight := m.height - lipgloss.Height(header) - 1 // 1 for status bar
+	if m.tagBarVisible {
+		contentHeight -= lipgloss.Height(tagBar)
+	}
 
-	// List panel (40% width).
-	listWidth := m.width * 2 / 5
+	// List panel.
+	listWidth := int(float64(m.width) * m.panelRatio)
 	detailWidth := m.width - listWidth
 
 	var listContent string
@@ -663,11 +1158,20 @@ func (m Model) View() string {
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
 
+	// Focus timer string.
+	timerStr := m.focusTimerStr()
+
 	// Status bar.
-	statusBar := ui.RenderStatusBar(allCount, doneCount, activeCount, m.width, m.statusMsg, m.focusedPanel, m.activeTab)
+	statusBar := ui.RenderStatusBar(allCount, doneCount, activeCount, m.width, m.statusMsg, m.focusedPanel, m.activeTab, timerStr, m.undoAction != nil)
 
 	// Combine all sections.
-	view := lipgloss.JoinVertical(lipgloss.Left, header, content, statusBar)
+	var sections []string
+	sections = append(sections, header)
+	if m.tagBarVisible {
+		sections = append(sections, tagBar)
+	}
+	sections = append(sections, content, statusBar)
+	view := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
 	// Overlay dialogs.
 	switch m.mode {
@@ -699,6 +1203,26 @@ func (m Model) View() string {
 				lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
 		}
 
+	case modeExport:
+		if m.form != nil {
+			formView := m.form.View()
+			dialogContent := lipgloss.NewStyle().Bold(true).Foreground(white).Render("Export") + "\n\n" + formView
+			dialog := dialogStyle.Render(dialogContent)
+			view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
+				lipgloss.WithWhitespaceChars(" "),
+				lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+		}
+
+	case modeTimeLog:
+		if m.form != nil {
+			formView := m.form.View()
+			dialogContent := lipgloss.NewStyle().Bold(true).Foreground(white).Render("Log Time") + "\n\n" + formView
+			dialog := dialogStyle.Render(dialogContent)
+			view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
+				lipgloss.WithWhitespaceChars(" "),
+				lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+		}
+
 	case modeConfirmDelete:
 		selected := m.selectedTask()
 		title := ""
@@ -721,14 +1245,37 @@ func (m Model) View() string {
 			lipgloss.WithWhitespaceChars(" "),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
 
+	case modeFocusConfirmCancel:
+		remaining := ""
+		if m.focusSession != nil {
+			remaining = focus.FormatTimer(m.focusSession.Remaining(time.Now()))
+		}
+		dialog := ui.RenderConfirmDialogBox("Cancel Focus?", fmt.Sprintf("Cancel session with %s remaining?", remaining), ui.Yellow)
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+
+	case modeTagFilter:
+		// Tag filter uses the tag bar + inline selection, no overlay needed.
+
+	case modeBlockerPicker:
+		dialog := m.renderBlockerOverlay()
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+
+	case modeStats:
+		statsView := m.renderStatsOverlay()
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, statsView,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
+
 	case modeHelp:
 		helpView := m.renderHelpOverlay()
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpView,
 			lipgloss.WithWhitespaceChars(" "),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("#111111")))
 	}
-
-	// Note: journal tab overlays are handled by renderJournalOverlays in viewJournal path.
 
 	return view
 }
@@ -737,13 +1284,16 @@ func (m *Model) resizeComponents() {
 	header := ui.RenderTabs(m.activeTab, 0, 0, 0, 0, m.width)
 	headerHeight := lipgloss.Height(header)
 	statusBarHeight := 1
-	contentHeight := m.height - headerHeight - statusBarHeight
+	tagBarHeight := 0
+	if m.tagBarVisible {
+		tagBarHeight = 1
+	}
+	contentHeight := m.height - headerHeight - statusBarHeight - tagBarHeight
 
-	listWidth := m.width * 2 / 5
+	listWidth := int(float64(m.width) * m.panelRatio)
 	detailWidth := m.width - listWidth
 
 	// Both panels: border(2w,2h) + padding(0,1)=(2w,0h) → frame: 4w, 2h
-	// Title is embedded in the border, no extra line needed.
 	m.list.SetSize(listWidth-4, contentHeight-2)
 	m.viewport.Width = detailWidth - 4
 	m.viewport.Height = contentHeight - 2
@@ -823,23 +1373,39 @@ func (m *Model) refreshList() {
 }
 
 func (m *Model) filteredTasks() []task.Task {
-	if m.activeTab == 0 {
-		return m.tasks
-	}
-	var filtered []task.Task
+	var result []task.Task
+
+	// First, filter by tab.
 	for _, t := range m.tasks {
 		switch m.activeTab {
+		case 0: // All
+			result = append(result, t)
 		case 1: // Active (Pending + InProgress)
 			if t.Status != task.Done {
-				filtered = append(filtered, t)
+				result = append(result, t)
 			}
 		case 2: // Done
 			if t.Status == task.Done {
-				filtered = append(filtered, t)
+				result = append(result, t)
 			}
 		}
 	}
-	return filtered
+
+	// Then, filter by active tag if set.
+	if m.activeTag != "" {
+		var tagFiltered []task.Task
+		for _, t := range result {
+			for _, tag := range t.Tags {
+				if tag == m.activeTag {
+					tagFiltered = append(tagFiltered, t)
+					break
+				}
+			}
+		}
+		result = tagFiltered
+	}
+
+	return result
 }
 
 func (m *Model) updateDetail() {
@@ -881,6 +1447,163 @@ func (m *Model) sortTasks() {
 	}
 	m.refreshList()
 	m.updateDetail()
+}
+
+func (m *Model) allTags() []string {
+	tagSet := make(map[string]bool)
+	for _, t := range m.tasks {
+		for _, tag := range t.Tags {
+			tagSet[tag] = true
+		}
+	}
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func (m *Model) focusTimerStr() string {
+	if !m.focusActive || m.focusSession == nil {
+		return ""
+	}
+	remaining := m.focusSession.Remaining(time.Now())
+	return "🍅 " + focus.FormatTimer(remaining)
+}
+
+func (m *Model) computeStats() {
+	s := &statsData{
+		totalTasks: len(m.tasks),
+		tagCounts:  make(map[string]int),
+	}
+	for _, t := range m.tasks {
+		switch t.Status {
+		case task.Done:
+			s.doneTasks++
+		default:
+			s.activeTasks++
+		}
+		switch t.Priority {
+		case task.Low:
+			s.lowCount++
+		case task.Medium:
+			s.medCount++
+		case task.High:
+			s.highCount++
+		case task.Urgent:
+			s.urgentCount++
+		}
+		for _, tag := range t.Tags {
+			s.tagCounts[tag]++
+		}
+	}
+	if m.focusStore != nil {
+		s.focusToday, _ = m.focusStore.TodayCount()
+	}
+	if m.journalStore != nil {
+		completions := make(map[string]int)
+		for _, n := range m.notes {
+			if len(n.Entries) > 0 {
+				completions[n.Date.Format(time.DateOnly)] = len(n.Entries)
+			}
+		}
+		s.journalStreak = ui.RenderJournalStreak(completions, 30)
+	}
+	m.stats = s
+}
+
+func (m Model) renderStatsOverlay() string {
+	if m.stats == nil {
+		return ""
+	}
+	s := m.stats
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(white).Render("Statistics"))
+	lines = append(lines, "")
+
+	// Task counts.
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Tasks"))
+	lines = append(lines, fmt.Sprintf("  Total: %d  Active: %d  Done: %d", s.totalTasks, s.activeTasks, s.doneTasks))
+	lines = append(lines, "")
+
+	// Priority breakdown.
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Priority"))
+	lines = append(lines, "  "+ui.RenderPriorityBreakdown(s.lowCount, s.medCount, s.highCount, s.urgentCount))
+	lines = append(lines, "")
+
+	// Tags.
+	if len(s.tagCounts) > 0 {
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Tags"))
+		lines = append(lines, "  "+ui.RenderTagCloud(s.tagCounts))
+		lines = append(lines, "")
+	}
+
+	// Focus sessions today.
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Focus"))
+	lines = append(lines, fmt.Sprintf("  Sessions today: %d", s.focusToday))
+	lines = append(lines, "")
+
+	// Journal streak.
+	if s.journalStreak != "" {
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Journal"))
+		lines = append(lines, "  "+s.journalStreak)
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, lipgloss.NewStyle().Foreground(gray).Render("Press Esc or G to close"))
+
+	content := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(cyan).
+		Padding(1, 3).
+		Width(60).
+		Render(content)
+}
+
+func (m Model) renderBlockerOverlay() string {
+	selected := m.selectedTask()
+	if selected == nil {
+		return ""
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(white).Render("Task Dependencies"))
+	lines = append(lines, "")
+	lines = append(lines, lipgloss.NewStyle().Foreground(gray).Render(fmt.Sprintf("Task: %s", selected.Title)))
+	lines = append(lines, "")
+
+	if len(selected.BlockedByIDs) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(gray).Render("No blockers"))
+	} else {
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("Blocked by:"))
+		for _, id := range selected.BlockedByIDs {
+			blocker, err := m.store.GetByID(id)
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("  - Task #%d (not found)", id))
+				continue
+			}
+			statusIcon := blocker.Status.Icon()
+			style := lipgloss.NewStyle().Foreground(ui.White)
+			if blocker.Status == task.Done {
+				style = style.Foreground(ui.Green)
+			}
+			lines = append(lines, style.Render(fmt.Sprintf("  %s %s", statusIcon, blocker.Title)))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, lipgloss.NewStyle().Foreground(gray).Render("Press Esc to close"))
+
+	content := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(cyan).
+		Padding(1, 2).
+		Width(50).
+		Render(content)
 }
 
 // renderPanel draws a bordered panel with the title embedded in the top border (lazygit-style).
@@ -950,6 +1673,7 @@ func (m Model) renderHelpOverlay() string {
 		{"Esc", "Back to list / clear filter"},
 		{"j/k", "Navigate items in panel"},
 		{"Tab", "Switch tab"},
+		{"< / >", "Resize panels"},
 		{"", ""},
 		{"", "1: Tasks (list focused):"},
 		{"a", "Add new task"},
@@ -958,12 +1682,21 @@ func (m Model) renderHelpOverlay() string {
 		{"s", "Cycle task status"},
 		{"/", "Search / filter"},
 		{"F1/F2/F3", "Sort date/due/prio"},
+		{"F4", "Toggle tag filter bar"},
 		{"", ""},
 		{"", "2: Details (detail focused):"},
 		{"a", "Add subtask"},
 		{"e", "Edit subtask"},
 		{"d", "Delete subtask"},
 		{"s", "Toggle subtask"},
+		{"l", "Log time"},
+		{"b", "View blockers"},
+		{"", ""},
+		{"", "Global:"},
+		{"p", "Start/cancel focus timer"},
+		{"X", "Export tasks"},
+		{"G", "Statistics dashboard"},
+		{"Ctrl+Z", "Undo last action"},
 		{"", ""},
 		{"", "Forms:"},
 		{"Tab/S-Tab", "Next / prev field"},

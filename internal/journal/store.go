@@ -269,6 +269,27 @@ func (s *Store) listAllEntries(notes []Note) (map[int64][]Entry, error) {
 	return result, rows.Err()
 }
 
+// RestoreEntry re-inserts a previously deleted journal entry.
+func (s *Store) RestoreEntry(noteID int64, body string, createdAt time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`INSERT INTO journal_entries (note_id, body, created_at) VALUES (?,?,?)`,
+		noteID, body, createdAt.Format(time.RFC3339),
+	); err != nil {
+		return fmt.Errorf("restore entry: %w", err)
+	}
+	now := time.Now().Format(time.RFC3339)
+	if _, err := tx.Exec(`UPDATE journal_notes SET updated_at = ? WHERE id = ?`, now, noteID); err != nil {
+		return fmt.Errorf("update note timestamp: %w", err)
+	}
+	return tx.Commit()
+}
+
 // ListEntries returns all entries for a note, ordered by created_at ASC.
 func (s *Store) ListEntries(noteID int64) ([]Entry, error) {
 	rows, err := s.db.Query(

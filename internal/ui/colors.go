@@ -12,4 +12,5 @@ var (
 	Red     = lipgloss.Color("#F44336")
 	Yellow  = lipgloss.Color("#FFC107")
 	Magenta = lipgloss.Color("#E040FB")
+	Orange  = lipgloss.Color("#FF9800")
 )
