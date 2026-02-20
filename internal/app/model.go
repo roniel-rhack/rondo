@@ -96,6 +96,11 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles all incoming messages and returns the updated model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Forms need ALL message types (cursor blink, timers, etc.), not just KeyMsg.
+	if m.mode == modeAdd || m.mode == modeEdit || m.mode == modeSubtask {
+		return m.updateFormMsg(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tasksLoaded:
 		m.tasks = msg.tasks
@@ -114,13 +119,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Delegate to form when in form modes.
-		if m.mode == modeAdd || m.mode == modeEdit {
-			return m.updateForm(msg)
-		}
-		if m.mode == modeSubtask {
-			return m.updateSubtaskForm(msg)
-		}
 		if m.mode == modeConfirmDelete {
 			return m.updateConfirmDelete(msg)
 		}
@@ -242,43 +240,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
+// updateFormMsg handles ALL message types for form modes (not just KeyMsg).
+func (m *Model) updateFormMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle window resize even during form mode
+	if wsm, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wsm.Width
+		m.height = wsm.Height
+		m.resizeComponents()
+	}
+
+	// Only intercept Esc from key messages
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
 		m.mode = modeNormal
 		m.form = nil
 		m.formData = nil
 		return m, nil
 	}
 
+	// Pass all messages to the form (cursor blink, timers, keys, etc.)
 	form, cmd := m.form.Update(msg)
 	if f, ok := form.(*huh.Form); ok {
 		m.form = f
 		if m.form.State == huh.StateCompleted {
-			m.submitTaskForm()
-			return m, nil
-		}
-	}
-	return m, cmd
-}
-
-func (m *Model) updateSubtaskForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
-		m.mode = modeNormal
-		m.form = nil
-		return m, nil
-	}
-
-	form, cmd := m.form.Update(msg)
-	if f, ok := form.(*huh.Form); ok {
-		m.form = f
-		if m.form.State == huh.StateCompleted {
-			selected := m.selectedTask()
-			if selected != nil && m.subtaskTitle != "" {
-				m.store.AddSubtask(selected.ID, m.subtaskTitle)
+			if m.mode == modeSubtask {
+				selected := m.selectedTask()
+				if selected != nil && m.subtaskTitle != "" {
+					m.store.AddSubtask(selected.ID, m.subtaskTitle)
+				}
+				m.mode = modeNormal
+				m.form = nil
+				m.reload()
+				return m, nil
 			}
-			m.mode = modeNormal
-			m.form = nil
-			m.reload()
+			m.submitTaskForm()
 			return m, nil
 		}
 	}
