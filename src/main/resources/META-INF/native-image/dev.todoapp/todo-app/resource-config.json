@@ -1,8 +1,0 @@
-{
-  "resources": {
-    "includes": [
-      { "pattern": "themes/.*\\.tcss$" },
-      { "pattern": "bindings\\.properties$" }
-    ]
-  }
-}

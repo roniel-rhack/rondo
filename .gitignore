@@ -1,6 +1,18 @@
-target/
-*.class
+# Go
+/todo
+/todo-app
+*.exe
+
+# IDE
 .idea/
 *.iml
+.vscode/
+
+# Claude
 .claude/
-dependency-reduced-pom.xml
+
+# OS
+.DS_Store
+
+# Data (local)
+/data/
