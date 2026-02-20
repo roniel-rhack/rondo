@@ -38,7 +38,7 @@ func (n Note) DateTitle() string {
 
 // FilterValue implements list.Item for the bubbles list widget.
 func (n Note) FilterValue() string {
-	return n.Date.Format("January 2, 2006")
+	return n.DateTitle()
 }
 
 // Title implements list.DefaultItem.

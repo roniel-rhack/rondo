@@ -590,20 +590,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sortTasks()
 			return m, nil
 
-		case key.Matches(msg, keys.Search):
-			m.list.SetShowFilter(true)
-			m.list.SetFilteringEnabled(true)
-			return m, nil
 		}
 	}
 
-	// Delegate to list for navigation and filtering.
+	// Delegate to the active list for navigation and filtering.
+	// This also handles internal list messages (e.g. filter matching) that
+	// are not tea.KeyMsg and fall through the type switch above.
 	var cmd tea.Cmd
-	prevIndex := m.list.Index()
-	m.list, cmd = m.list.Update(msg)
-	if m.list.Index() != prevIndex {
-		m.subtaskIdx = 0
-		m.updateDetail()
+	if m.activeTab == 3 {
+		prevIndex := m.journalList.Index()
+		m.journalList, cmd = m.journalList.Update(msg)
+		if m.journalList.Index() != prevIndex {
+			m.entryIdx = 0
+			m.updateJournalDetail()
+		}
+		m.journalList.SetShowFilter(m.journalList.FilterState() == list.Filtering || m.journalList.FilterState() == list.FilterApplied)
+	} else {
+		prevIndex := m.list.Index()
+		m.list, cmd = m.list.Update(msg)
+		if m.list.Index() != prevIndex {
+			m.subtaskIdx = 0
+			m.updateDetail()
+		}
+		m.list.SetShowFilter(m.list.FilterState() == list.Filtering || m.list.FilterState() == list.FilterApplied)
 	}
 
 	return m, cmd
@@ -1129,7 +1138,7 @@ func (m Model) View() string {
 	detailWidth := m.width - listWidth
 
 	var listContent string
-	if len(m.list.Items()) == 0 {
+	if len(m.list.Items()) == 0 && m.list.FilterState() == list.Unfiltered {
 		var emptyText string
 		switch m.activeTab {
 		case 1:
@@ -1667,43 +1676,28 @@ func renderPanel(content, title string, width, height int, focused bool) string 
 
 func (m Model) renderHelpOverlay() string {
 	helpLines := []struct{ key, desc string }{
-		{"", "Panels:"},
-		{"1", "Focus task list"},
-		{"2", "Focus detail panel"},
-		{"Esc", "Back to list / clear filter"},
-		{"j/k", "Navigate items in panel"},
+		{"", "Navigation"},
+		{"1 / 2", "Focus list / detail panel"},
+		{"j/k", "Navigate items"},
 		{"Tab", "Switch tab"},
 		{"< / >", "Resize panels"},
+		{"Esc", "Back to list / clear filter"},
 		{"", ""},
-		{"", "1: Tasks (list focused):"},
-		{"a", "Add new task"},
-		{"e", "Edit task"},
-		{"d", "Delete task"},
-		{"s", "Cycle task status"},
+		{"", "Tasks (1: list, 2: detail)"},
+		{"a / e / d", "Add / edit / delete"},
+		{"s", "Cycle status / toggle subtask"},
 		{"/", "Search / filter"},
-		{"F1/F2/F3", "Sort date/due/prio"},
-		{"F4", "Toggle tag filter bar"},
+		{"F1/F2/F3", "Sort date / due / priority"},
+		{"F4", "Tag filter bar"},
+		{"l", "Log time (detail)"},
+		{"b", "View blockers (detail)"},
 		{"", ""},
-		{"", "2: Details (detail focused):"},
-		{"a", "Add subtask"},
-		{"e", "Edit subtask"},
-		{"d", "Delete subtask"},
-		{"s", "Toggle subtask"},
-		{"l", "Log time"},
-		{"b", "View blockers"},
-		{"", ""},
-		{"", "Global:"},
-		{"p", "Start/cancel focus timer"},
-		{"X", "Export tasks"},
-		{"G", "Statistics dashboard"},
-		{"Ctrl+Z", "Undo last action"},
-		{"", ""},
-		{"", "Forms:"},
-		{"Tab/S-Tab", "Next / prev field"},
-		{"Enter", "Submit"},
-		{"Esc", "Cancel"},
-		{"", ""},
-		{"?", "Toggle this help"},
+		{"", "Tools"},
+		{"p", "Focus timer"},
+		{"X", "Export"},
+		{"G", "Statistics"},
+		{"Ctrl+Z", "Undo"},
+		{"?", "This help"},
 		{"q", "Quit"},
 	}
 

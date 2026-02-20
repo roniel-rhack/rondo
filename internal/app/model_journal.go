@@ -33,6 +33,7 @@ func (m *Model) updateJournal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Fall through to journalList.Update() below.
 		var cmd tea.Cmd
 		m.journalList, cmd = m.journalList.Update(msg)
+		m.journalList.SetShowFilter(m.journalList.FilterState() == list.Filtering || m.journalList.FilterState() == list.FilterApplied)
 		return m, cmd
 	}
 
@@ -88,10 +89,6 @@ func (m *Model) updateJournal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.setStatus("Showing hidden notes")
 			}
 			return m, m.setStatus("Hiding hidden notes")
-		case key.Matches(msg, keys.Search):
-			m.journalList.SetShowFilter(true)
-			m.journalList.SetFilteringEnabled(true)
-			return m, nil
 		}
 	}
 
@@ -149,6 +146,10 @@ func (m *Model) updateJournal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.entryIdx = 0
 		m.updateJournalDetail()
 	}
+
+	// Show/hide filter bar based on filtering state.
+	m.journalList.SetShowFilter(m.journalList.FilterState() == list.Filtering || m.journalList.FilterState() == list.FilterApplied)
+
 	return m, cmd
 }
 
@@ -370,7 +371,7 @@ func (m Model) viewJournal(header string) string {
 	detailWidth := m.width - listWidth
 
 	var listContent string
-	if len(m.journalList.Items()) == 0 {
+	if len(m.journalList.Items()) == 0 && m.journalList.FilterState() == list.Unfiltered {
 		var emptyText string
 		if len(m.notes) == 0 {
 			emptyText = "No journal entries yet\n\nPress 'a' to write your\nfirst entry"
@@ -421,33 +422,26 @@ func (m Model) viewJournal(header string) string {
 // renderJournalHelpOverlay renders the help overlay for journal context.
 func (m Model) renderJournalHelpOverlay() string {
 	helpLines := []struct{ key, desc string }{
-		{"", "Panels:"},
-		{"1", "Focus notes list"},
-		{"2", "Focus entries panel"},
-		{"Esc", "Back to list / clear filter"},
+		{"", "Navigation"},
+		{"1 / 2", "Focus notes / entries panel"},
 		{"j/k", "Navigate items"},
 		{"Tab", "Switch tab"},
 		{"< / >", "Resize panels"},
+		{"Esc", "Back to list / clear filter"},
 		{"", ""},
-		{"", "1: Notes (list focused):"},
+		{"", "Journal"},
 		{"a", "Add entry (today)"},
+		{"e / d", "Edit / delete entry (entries)"},
 		{"h", "Hide / restore note"},
 		{"H", "Toggle show hidden"},
 		{"/", "Search notes"},
 		{"", ""},
-		{"", "2: Entries (entries panel):"},
-		{"a", "Add entry (today)"},
-		{"e", "Edit selected entry"},
-		{"d", "Delete selected entry"},
-		{"j/k", "Navigate entries"},
-		{"", ""},
-		{"", "Global:"},
-		{"p", "Start/cancel focus timer"},
-		{"X", "Export tasks"},
-		{"G", "Statistics dashboard"},
-		{"Ctrl+Z", "Undo last action"},
-		{"", ""},
-		{"?", "Toggle this help"},
+		{"", "Tools"},
+		{"p", "Focus timer"},
+		{"X", "Export"},
+		{"G", "Statistics"},
+		{"Ctrl+Z", "Undo"},
+		{"?", "This help"},
 		{"q", "Quit"},
 	}
 

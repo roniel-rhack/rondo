@@ -21,6 +21,11 @@ func Backup(db *sql.DB, dir string, retainDays int) error {
 	name := fmt.Sprintf("backup-%s.db", time.Now().Format("2006-01-02"))
 	dest := filepath.Join(dir, name)
 
+	// Skip if today's backup already exists.
+	if _, err := os.Stat(dest); err == nil {
+		return pruneBackups(dir, retainDays)
+	}
+
 	// VACUUM INTO creates a standalone copy of the database.
 	if _, err := db.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, dest)); err != nil {
 		return fmt.Errorf("vacuum into %s: %w", dest, err)
