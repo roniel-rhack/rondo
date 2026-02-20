@@ -2,11 +2,15 @@
 /todo
 /todo-app
 *.exe
+*.test
+*.out
+vendor/
 
 # IDE
 .idea/
 *.iml
 .vscode/
+*.swp
 
 # Claude
 .claude/
@@ -14,5 +18,5 @@
 # OS
 .DS_Store
 
-# Data (local)
-/data/
+# Data
+*.db
