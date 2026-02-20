@@ -324,7 +324,7 @@ public class TodoApp extends ToolkitApp {
                         .field("title", "Title", Validators.required("Title is required"))
                         .field("description", "Description", FieldType.TEXT_AREA)
                         .field("priority", "Priority", FieldType.SELECT)
-                        .field("dueDate", "Due Date", "yyyy-mm-dd")
+                        .field("dueDate", "Due Date", "yyyy-MM-dd")
                         .labelWidth(14)
                         .spacing(1)
                         .rounded()
@@ -502,11 +502,10 @@ public class TodoApp extends ToolkitApp {
                 task.subtasks().stream()
                         .filter(st -> !st.completed())
                         .findFirst()
-                        .ifPresentOrElse(
-                                SubTask::toggle,
-                                () -> task.subtasks().getFirst().toggle()
-                        );
-                saveAndRefresh();
+                        .ifPresent(st -> {
+                            st.toggle();
+                            saveAndRefresh();
+                        });
             }
             return EventResult.HANDLED;
         }
@@ -540,12 +539,13 @@ public class TodoApp extends ToolkitApp {
 
     private EventResult handleSearchEvent(KeyEvent event) {
         if (event.isCancel()) {
+            controller.clearSearch();
             mode = AppMode.NORMAL;
-            if (searchInputState.text().isEmpty()) controller.clearSearch();
             searchInputState.clear();
             return EventResult.HANDLED;
         }
         if (event.isConfirm()) {
+            controller.setSearchQuery(searchInputState.text());
             mode = AppMode.NORMAL;
             searchInputState.clear();
             return EventResult.HANDLED;

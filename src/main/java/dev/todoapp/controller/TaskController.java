@@ -93,14 +93,17 @@ public class TaskController {
 
     public void sortByCreatedAt() {
         tasks.sort(Comparator.comparing(Task::createdAt));
+        selectedIndex = 0;
     }
 
     public void sortByDueDate() {
         tasks.sort(Comparator.comparing(Task::dueDate, Comparator.nullsLast(Comparator.naturalOrder())));
+        selectedIndex = 0;
     }
 
     public void sortByPriority() {
         tasks.sort(Comparator.comparing(Task::priority).reversed());
+        selectedIndex = 0;
     }
 
     public int totalCount() { return tasks.size(); }
