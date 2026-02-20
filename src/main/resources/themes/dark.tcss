@@ -1,14 +1,9 @@
 $accent: cyan;
 $bg: black;
 $fg: white;
+$muted: gray;
 $border: gray;
 $border-focus: cyan;
-$done: green;
-$overdue: red;
-$priority-low: green;
-$priority-medium: yellow;
-$priority-high: red;
-$priority-urgent: bright-magenta;
 
 Panel {
     border-type: rounded;
@@ -19,12 +14,11 @@ Panel {
 }
 
 #header {
-    border-type: rounded;
-    border-color: $accent;
+    border-type: none;
 }
 
 TabsElement-tab {
-    color: gray;
+    color: $muted;
 }
 
 TabsElement-tab:selected {
@@ -39,10 +33,6 @@ TabsElement-tab:selected {
     }
 }
 
-ListElement-item {
-    color: $fg;
-}
-
 ListElement-item:selected {
     background: $accent;
     color: black;
@@ -54,33 +44,37 @@ ListElement-item:selected {
 }
 
 #status-bar {
-    color: gray;
-    text-style: dim;
+    color: $muted;
 }
 
-#search-input {
+Dialog {
+    border-type: double;
+    border-color: $accent;
+    background: $bg;
+}
+
+TextInputElement {
     border-type: rounded;
-    border-color: $border;
+    border-color: $muted;
     &:focus {
         border-color: $accent;
     }
 }
 
-TextInputElement-placeholder {
-    color: gray;
+FormElement {
+    spacing: 1;
+}
+
+FormFieldElement-label {
+    color: $muted;
+    text-style: dim;
+}
+
+FormFieldElement-error {
+    color: red;
     text-style: italic;
 }
 
-.priority-low { color: $priority-low; }
-.priority-medium { color: $priority-medium; }
-.priority-high { color: $priority-high; }
-.priority-urgent { color: $priority-urgent; text-style: bold; }
-
-.status-done { color: $done; }
-.status-overdue { color: $overdue; text-style: bold; }
-
-#dialog {
-    border-type: double;
-    border-color: $accent;
-    background: black;
+LineGaugeElement {
+    color: $accent;
 }
