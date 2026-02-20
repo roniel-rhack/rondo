@@ -11,6 +11,9 @@ import dev.tamboui.toolkit.elements.MarkupTextElement;
 import dev.tamboui.toolkit.event.EventResult;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
+import dev.tamboui.widgets.form.FieldType;
+import dev.tamboui.widgets.form.FormState;
+import dev.tamboui.widgets.form.Validators;
 import dev.tamboui.widgets.input.TextInputState;
 import dev.todoapp.controller.TaskController;
 import dev.todoapp.model.*;
@@ -30,12 +33,14 @@ public class TodoApp extends ToolkitApp {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATETIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    private enum AppMode { NORMAL, SEARCH, ADD_TASK, EDIT_TASK, CONFIRM_DELETE, HELP }
+    private enum AppMode { NORMAL, SEARCH, ADD_TASK, EDIT_TASK, CONFIRM_DELETE, HELP, ADD_SUBTASK }
 
     private final TaskController controller = new TaskController();
     private final JsonTaskStore store;
     private final ListElement<?> taskList = list();
-    private final TextInputState inputState = new TextInputState();
+    private final TextInputState searchInputState = new TextInputState();
+    private final TextInputState subtaskInputState = new TextInputState();
+    private FormState formState;
     private AppMode mode = AppMode.NORMAL;
 
     public TodoApp() {
@@ -55,6 +60,7 @@ public class TodoApp extends ToolkitApp {
             case HELP -> stack(mainContent, renderHelpDialog());
             case CONFIRM_DELETE -> stack(mainContent, renderConfirmDialog());
             case ADD_TASK, EDIT_TASK -> stack(mainContent, renderInputDialog());
+            case ADD_SUBTASK -> stack(mainContent, renderSubtaskDialog());
             default -> mainContent;
         };
     }
@@ -80,7 +86,7 @@ public class TodoApp extends ToolkitApp {
             return column(
                     tabsRow,
                     panel(
-                            textInput(inputState)
+                            textInput(searchInputState)
                                     .placeholder("Type to search...")
                                     .rounded()
                                     .borderColor(Color.GRAY)
@@ -251,6 +257,7 @@ public class TodoApp extends ToolkitApp {
                         Span.raw("e").fg(Color.CYAN), Span.raw(":edit ").dim(),
                         Span.raw("d").fg(Color.CYAN), Span.raw(":del ").dim(),
                         Span.raw("s").fg(Color.CYAN), Span.raw(":status ").dim(),
+                        Span.raw("t").fg(Color.CYAN), Span.raw(":sub ").dim(),
                         Span.raw("/").fg(Color.CYAN), Span.raw(":find ").dim(),
                         Span.raw("?").fg(Color.CYAN), Span.raw(":help ").dim()
                 )))
@@ -272,6 +279,8 @@ public class TodoApp extends ToolkitApp {
                 markupText("  [cyan]e           [/]Edit selected task"),
                 markupText("  [cyan]d           [/]Delete task"),
                 markupText("  [cyan]s           [/]Cycle task status"),
+                markupText("  [cyan]t           [/]Add subtask"),
+                markupText("  [cyan]x           [/]Toggle subtask"),
                 markupText("  [cyan]/           [/]Search tasks"),
                 text(""),
                 markupText("  [bold cyan]Sorting[/]"),
@@ -311,21 +320,127 @@ public class TodoApp extends ToolkitApp {
         String title = mode == AppMode.ADD_TASK ? "New Task" : "Edit Task";
         return dialog(title,
                 text(""),
-                markupText("  [bold]Title:[/]"),
-                text(""),
-                textInput(inputState)
-                        .placeholder("Enter task title...")
+                form(formState)
+                        .field("title", "Title", Validators.required("Title is required"))
+                        .field("description", "Description", FieldType.TEXT_AREA)
+                        .field("priority", "Priority", FieldType.SELECT)
+                        .field("dueDate", "Due Date", "yyyy-mm-dd")
+                        .labelWidth(14)
+                        .spacing(1)
                         .rounded()
                         .borderColor(Color.GRAY)
                         .focusedBorderColor(Color.CYAN)
-                        .showCursor(true)
-                        .cursorRequiresFocus(false)
-                        .focusable(false),
+                        .errorBorderColor(Color.RED)
+                        .showInlineErrors(true)
+                        .arrowNavigation(true)
+                        .submitOnEnter(true)
+                        .validateOnSubmit(true)
+                        .onSubmit(this::onFormSubmit),
                 text(""),
-                markupText("  [bold green]Enter[/] [dim]Confirm[/]   [bold red]Esc[/] [dim]Cancel[/]")
-        ).width(60).minWidth(40).padding(1).doubleBorder().borderColor(Color.CYAN)
+                markupText("  [dim]Tab/↑↓[/]: fields  [dim]Enter[/]: save  [dim]Esc[/]: cancel")
+        ).width(65).minWidth(50).padding(1).doubleBorder().borderColor(Color.CYAN)
                 .focusable()
-                .onKeyEvent(this::handleInputEvent);
+                .onKeyEvent(this::handleFormDialogEvent);
+    }
+
+    private FormState createFormState(String title, String description, int priorityIndex, String dueDate) {
+        return FormState.builder()
+                .textField("title", title)
+                .textField("description", description)
+                .selectField("priority", List.of("Low", "Medium", "High", "Urgent"), priorityIndex)
+                .textField("dueDate", dueDate)
+                .build();
+    }
+
+    private void onFormSubmit(FormState state) {
+        String title = state.textValue("title");
+        if (title == null || title.isBlank()) return;
+
+        String description = state.textValue("description");
+        String priorityStr = state.selectValue("priority");
+        String dueDateStr = state.textValue("dueDate");
+
+        Priority priority = switch (priorityStr) {
+            case "Low" -> Priority.LOW;
+            case "High" -> Priority.HIGH;
+            case "Urgent" -> Priority.URGENT;
+            default -> Priority.MEDIUM;
+        };
+
+        LocalDate dueDate = null;
+        if (dueDateStr != null && !dueDateStr.isBlank()) {
+            try {
+                dueDate = LocalDate.parse(dueDateStr.trim());
+            } catch (Exception ignored) {}
+        }
+
+        if (mode == AppMode.ADD_TASK) {
+            Task task = controller.addTask(title.trim());
+            if (description != null && !description.isBlank()) task.setDescription(description.trim());
+            task.setPriority(priority);
+            if (dueDate != null) task.setDueDate(dueDate);
+        } else if (mode == AppMode.EDIT_TASK) {
+            Task task = controller.selectedTask();
+            if (task != null) {
+                task.setTitle(title.trim());
+                task.setDescription(description != null ? description.trim() : null);
+                task.setPriority(priority);
+                task.setDueDate(dueDate);
+            }
+        }
+
+        mode = AppMode.NORMAL;
+        formState = null;
+        saveAndRefresh();
+    }
+
+    private EventResult handleFormDialogEvent(KeyEvent event) {
+        if (event.isCancel()) {
+            mode = AppMode.NORMAL;
+            formState = null;
+            return EventResult.HANDLED;
+        }
+        return EventResult.UNHANDLED;
+    }
+
+    private Element renderSubtaskDialog() {
+        return dialog("Add Subtask",
+                text(""),
+                formField("Subtask", subtaskInputState)
+                        .placeholder("Enter subtask title...")
+                        .labelWidth(12)
+                        .rounded()
+                        .borderColor(Color.GRAY)
+                        .focusedBorderColor(Color.CYAN)
+                        .onSubmit(this::onSubtaskSubmit)
+                        .arrowNavigation(false),
+                text(""),
+                markupText("  [dim]Enter[/]: add  [dim]Esc[/]: cancel")
+        ).width(60).padding(1).doubleBorder().borderColor(Color.CYAN)
+                .focusable()
+                .onKeyEvent(this::handleSubtaskDialogEvent);
+    }
+
+    private void onSubtaskSubmit() {
+        String title = subtaskInputState.text();
+        if (title != null && !title.isBlank()) {
+            Task task = controller.selectedTask();
+            if (task != null) {
+                task.addSubTask(title.trim());
+                saveAndRefresh();
+            }
+        }
+        mode = AppMode.NORMAL;
+        subtaskInputState.clear();
+    }
+
+    private EventResult handleSubtaskDialogEvent(KeyEvent event) {
+        if (event.isCancel()) {
+            mode = AppMode.NORMAL;
+            subtaskInputState.clear();
+            return EventResult.HANDLED;
+        }
+        return EventResult.UNHANDLED;
     }
 
     // ─── Event Handlers ────────────────────────────────────
@@ -348,15 +463,18 @@ public class TodoApp extends ToolkitApp {
         }
 
         if (event.isChar('a')) {
+            formState = createFormState("", "", 1, "");
             mode = AppMode.ADD_TASK;
-            inputState.clear();
             return EventResult.HANDLED;
         }
         if (event.isChar('e')) {
             Task selected = controller.selectedTask();
             if (selected != null) {
+                int priorityIndex = selected.priority().ordinal();
+                String dueStr = selected.dueDate() != null ? selected.dueDate().format(DATE_FMT) : "";
+                String desc = selected.description() != null ? selected.description() : "";
+                formState = createFormState(selected.title(), desc, priorityIndex, dueStr);
                 mode = AppMode.EDIT_TASK;
-                inputState.setText(selected.title());
             }
             return EventResult.HANDLED;
         }
@@ -371,10 +489,31 @@ public class TodoApp extends ToolkitApp {
             saveAndRefresh();
             return EventResult.HANDLED;
         }
+        if (event.isChar('t')) {
+            if (controller.selectedTask() != null) {
+                subtaskInputState.clear();
+                mode = AppMode.ADD_SUBTASK;
+            }
+            return EventResult.HANDLED;
+        }
+        if (event.isChar('x')) {
+            Task task = controller.selectedTask();
+            if (task != null && !task.subtasks().isEmpty()) {
+                task.subtasks().stream()
+                        .filter(st -> !st.completed())
+                        .findFirst()
+                        .ifPresentOrElse(
+                                SubTask::toggle,
+                                () -> task.subtasks().getFirst().toggle()
+                        );
+                saveAndRefresh();
+            }
+            return EventResult.HANDLED;
+        }
 
         if (event.isChar('/')) {
             mode = AppMode.SEARCH;
-            inputState.setText(controller.searchQuery());
+            searchInputState.setText(controller.searchQuery());
             return EventResult.HANDLED;
         }
 
@@ -402,41 +541,17 @@ public class TodoApp extends ToolkitApp {
     private EventResult handleSearchEvent(KeyEvent event) {
         if (event.isCancel()) {
             mode = AppMode.NORMAL;
-            if (inputState.text().isEmpty()) controller.clearSearch();
-            inputState.clear();
+            if (searchInputState.text().isEmpty()) controller.clearSearch();
+            searchInputState.clear();
             return EventResult.HANDLED;
         }
         if (event.isConfirm()) {
             mode = AppMode.NORMAL;
-            inputState.clear();
+            searchInputState.clear();
             return EventResult.HANDLED;
         }
-        if (handleTextInputKey(inputState, event)) {
-            controller.setSearchQuery(inputState.text());
-            return EventResult.HANDLED;
-        }
-        return EventResult.UNHANDLED;
-    }
-
-    private EventResult handleInputEvent(KeyEvent event) {
-        if (event.isCancel()) {
-            mode = AppMode.NORMAL;
-            inputState.clear();
-            return EventResult.HANDLED;
-        }
-        if ((event.isSelect() || event.isConfirm()) && !inputState.text().isBlank()) {
-            if (mode == AppMode.ADD_TASK) {
-                controller.addTask(inputState.text().trim());
-            } else if (mode == AppMode.EDIT_TASK) {
-                Task task = controller.selectedTask();
-                if (task != null) task.setTitle(inputState.text().trim());
-            }
-            mode = AppMode.NORMAL;
-            inputState.clear();
-            saveAndRefresh();
-            return EventResult.HANDLED;
-        }
-        if (handleTextInputKey(inputState, event)) {
+        if (handleTextInputKey(searchInputState, event)) {
+            controller.setSearchQuery(searchInputState.text());
             return EventResult.HANDLED;
         }
         return EventResult.UNHANDLED;
