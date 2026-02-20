@@ -1,8 +1,8 @@
-# Todo App - Project Guide
+# RonDO - Project Guide
 
 ## Project Overview
 
-A modern terminal user interface (TUI) task management application built with **Go** and the **Charm** ecosystem.
+**RonDO** is a modern terminal user interface (TUI) productivity app built with **Go** and the **Charm** ecosystem. It combines task management with a daily journal in a single keyboard-driven interface.
 
 ### Tech Stack
 - **Language**: Go 1.23+
@@ -25,8 +25,8 @@ modernc.org/sqlite v1.46.1
 
 ## Application Features
 
-### Core Functionality
-- **Task Management**: Create, view, edit, and delete tasks
+### Task Management
+- **CRUD**: Create, view, edit, and delete tasks
 - **Subtask Support**: Tasks can have subtasks with independent completion state
 - **Status Tracking**: Cycle tasks between Pending, In Progress, Done
 - **Tab Navigation**: All / Active / Done tabs with counts
@@ -34,28 +34,37 @@ modernc.org/sqlite v1.46.1
 - **Date Tracking**: Automatic creation date + optional due date
 - **Sorting**: Sort by creation date (F1), due date (F2), or priority (F3)
 - **Search**: Fuzzy search/filter via built-in bubbles list filtering
-- **Persistence**: SQLite database at `~/.todo-app/todo.db`
+- **Priority Levels**: Low, Medium, High, Urgent with color coding
+- **Tags**: Comma-separated tag support
 
-### Additional Features
-- Priority levels (Low, Medium, High, Urgent) with color coding
-- Tags (comma-separated)
+### Journal
+- **Daily Notes**: One note per calendar day, auto-created
+- **Entries**: Multiple timestamped entries per note
+- **Edit/Delete Entries**: Cursor-based entry selection with edit and delete
+- **Hide/Restore Notes**: Hide old notes, toggle visibility with `H`
+- **Smart Date Labels**: "Today", "Yesterday", weekday names, or full dates
+- **Search Notes**: Filter notes by date
+
+### General
 - Keyboard-driven navigation (vim-style j/k + arrows)
-- Status bar with task counts and keybinding hints
-- Confirmation dialogs for destructive actions
-- Huh forms with validation for task create/edit
-- Custom list delegate with status icons, priority labels, subtask counts
+- Two-panel layout with focus switching (1/2 keys)
+- Status bar with context-sensitive keybinding hints
+- Confirmation dialogs for all destructive actions
+- Huh forms with validation for all input
+- Dark theme with cyan accent colors
+- Persistence via SQLite at `~/.todo-app/todo.db`
 
 ### UI Layout
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Todo  │  All (7)  │  Active (4)  │  Done (3)                   │
+│  RonDO  │  All (7)  │  Active (4)  │  Done (3)  │  Journal (5) │
 ├────────────────────────┬─────────────────────────────────────────┤
-│  Task list (bubbles)   │  Task detail (viewport)                 │
-│  - Custom delegate     │  - Status, Priority, Due, Tags          │
-│  - Fuzzy search        │  - Description                          │
-│  - Colored items       │  - Subtasks + progress bar              │
+│  1: Panel (list)       │  2: Panel (detail/viewport)             │
+│  - Custom delegate     │  - Context-sensitive content             │
+│  - Fuzzy search        │  - Cursor selection in both panels       │
+│  - Colored items       │  - Subtasks/entries with progress        │
 ├────────────────────────┴─────────────────────────────────────────┤
-│  a:add  e:edit  d:del  s:status  t:sub  /:find  ?:help          │
+│  Context-sensitive status bar with keybinding hints              │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,71 +73,136 @@ modernc.org/sqlite v1.46.1
 ## Architecture
 
 ### Bubbletea MVU (Model-Update-View)
-- **Model**: `internal/app/model.go` - main state struct with list, viewport, form, mode tracking
-- **Update**: Handles tea.Msg dispatch - key events route to mode-specific handlers
+- **Model**: `internal/app/model.go` — main state struct with list, viewport, form, mode tracking
+- **Update**: Global keys (Quit/Help/Tab) handled first, then per-tab dispatch
 - **View**: Renders layout with header tabs, split panels, status bar, and modal overlays
 
 ### Project Structure
 ```
-cmd/todo/main.go              # Entry point
+cmd/todo/main.go                # Entry point
 internal/
   app/
-    model.go                  # Main Bubbletea Model + Update + View
-    keys.go                   # KeyMap definitions (key.Binding)
-    styles.go                 # Lip Gloss styles (cyan accent dark theme)
-    delegate.go               # Custom list.ItemDelegate for task rendering
+    model.go                    # Main Bubbletea Model + Update + View
+    model_journal.go            # Journal tab handlers (update, form, confirm, view)
+    keys.go                     # KeyMap definitions (key.Binding)
+    styles.go                   # Lip Gloss styles (cyan accent dark theme)
+    delegate.go                 # Custom list.ItemDelegate for task rendering
+    delegate_journal.go         # Custom list.ItemDelegate for journal notes
+  database/
+    db.go                       # SQLite connection (WAL mode, foreign keys)
+  journal/
+    journal.go                  # Domain model (Note, Entry, DateTitle)
+    store.go                    # SQLite repository (CRUD, batch queries, transactions)
   task/
-    task.go                   # Domain model (Task, Subtask, Status, Priority)
-    store.go                  # SQLite repository (CRUD, subtasks, tags)
+    task.go                     # Domain model (Task, Subtask, Status, Priority)
+    store.go                    # SQLite repository (CRUD, subtasks, tags)
   ui/
-    views.go                  # View rendering (tabs, detail, status bar, dialogs)
-    form.go                   # Huh form builders (task add/edit, subtask)
+    colors.go                   # Shared color palette
+    views.go                    # View rendering (tabs, detail, status bar, dialogs)
+    form.go                     # Huh form builders + form data types
 go.mod / go.sum
 ```
 
 ### Data Model
 ```go
+// Task management
 type Task struct {
-    ID          int64
-    Title       string
-    Description string
-    Status      Status      // Pending, InProgress, Done
-    Priority    Priority    // Low, Medium, High, Urgent
-    DueDate     *time.Time
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
-    Subtasks    []Subtask
-    Tags        []string
+    ID, Title, Description, Status, Priority
+    DueDate, CreatedAt, UpdatedAt
+    Subtasks []Subtask
+    Tags     []string
 }
 
 type Subtask struct {
-    ID        int64
-    Title     string
-    Completed bool
-    Position  int
+    ID, Title, Completed, Position
+}
+
+// Journal
+type Note struct {
+    ID, Date, Hidden, CreatedAt, UpdatedAt
+    Entries []Entry
+}
+
+type Entry struct {
+    ID, NoteID, Body, CreatedAt
 }
 ```
 
+### Mode System
+The app uses a mode enum to track UI state:
+- `modeNormal` — default navigation
+- `modeAdd`, `modeEdit` — task forms
+- `modeSubtask`, `modeEditSubtask` — subtask forms
+- `modeConfirmDelete`, `modeConfirmDeleteSubtask` — task/subtask delete confirmation
+- `modeJournalAdd`, `modeJournalEdit` — journal entry forms
+- `modeJournalConfirmHide`, `modeJournalConfirmDelete` — journal confirmations
+- `modeHelp` — help overlay
+
+### Key Patterns
+- **Global keys** (Quit/Help/Tab) are handled once in `Update()` before per-tab dispatch
+- **`switchTab()`** centralizes tab switching logic
+- **`reload()` / `reloadJournal()`** return errors, callers handle them
+- **Cursor tracking**: `subtaskIdx` for task detail, `entryIdx` for journal entries
+- **Confirm dialogs**: `ui.RenderConfirmDialogBox` with variadic border color
+- **Batch queries**: Journal entries loaded in a single query (no N+1)
+- **Transactions**: All multi-statement writes use `db.Begin()`/`tx.Commit()`
+- **Date parsing**: `time.ParseInLocation` for date-only fields (timezone-correct)
+
 ### SQLite Schema
-Database at `~/.todo-app/todo.db` with tables: `tasks`, `subtasks`, `tags` (with ON DELETE CASCADE).
+Database at `~/.todo-app/todo.db` with tables:
+- `tasks`, `subtasks`, `tags` — task management (ON DELETE CASCADE)
+- `journal_notes`, `journal_entries` — journal (ON DELETE CASCADE, indexed)
 
 ---
 
-## Key Keyboard Shortcuts
+## Keyboard Shortcuts
+
+### Global
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch tabs (All → Active → Done → Journal) |
+| `1` / `2` | Focus left panel / right panel |
+| `Esc` | Return to left panel / clear filter |
+| `?` | Toggle help overlay |
+| `q` / `Ctrl+C` | Quit |
+
+### Task Tabs — Panel 1 (Tasks)
 | Key | Action |
 |-----|--------|
 | `j`/`k` or `↑`/`↓` | Navigate task list |
-| `a` | Add new task (Huh form) |
+| `a` | Add new task |
 | `e` | Edit selected task |
-| `d` | Delete selected task (with confirmation) |
+| `d` | Delete selected task |
 | `s` | Cycle task status |
 | `t` | Add subtask |
-| `x` | Toggle next incomplete subtask |
 | `/` | Search / filter |
-| `Tab` | Switch tabs (All/Active/Done) |
 | `F1`/`F2`/`F3` | Sort by created/due/priority |
-| `?` | Toggle help overlay |
-| `q` / `Ctrl+C` | Quit |
+
+### Task Tabs — Panel 2 (Details)
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate subtasks |
+| `a` | Add subtask |
+| `e` | Edit subtask |
+| `d` | Delete subtask |
+| `s` | Toggle subtask completion |
+
+### Journal Tab — Panel 1 (Notes)
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate notes |
+| `a` | Add entry to today's note |
+| `h` | Hide / restore selected note |
+| `H` | Toggle show hidden notes |
+| `/` | Search / filter notes |
+
+### Journal Tab — Panel 2 (Entries)
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate entries (cursor) |
+| `a` | Add entry to today's note |
+| `e` | Edit selected entry |
+| `d` | Delete selected entry |
 
 ---
 
@@ -151,7 +225,7 @@ Database at `~/.todo-app/todo.db` with tables: `tasks`, `subtasks`, `tags` (with
 
 ### 4. Autonomous Bug Fixing
 - When given a bug report: just fix it
-- Point at logs, errors, failing tests - then resolve them
+- Point at logs, errors, failing tests — then resolve them
 
 ---
 
@@ -173,7 +247,7 @@ Database at `~/.todo-app/todo.db` with tables: `tasks`, `subtasks`, `tags` (with
 go build ./cmd/todo
 
 # Build named binary
-go build -o todo-app ./cmd/todo
+go build -o rondo ./cmd/todo
 
 # Run directly
 go run ./cmd/todo
