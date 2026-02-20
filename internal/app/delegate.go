@@ -4,12 +4,14 @@ package app
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/roniel/todo-app/internal/task"
+	"github.com/roniel/todo-app/internal/ui"
 )
 
 type taskDelegate struct{}
@@ -32,33 +34,35 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	isSelected := index == m.Index()
 
 	// Status icon
-	var statusIcon string
+	var statusColor lipgloss.Color
 	switch t.Status {
 	case task.InProgress:
-		statusIcon = statusInProgressStyle.Render(t.Status.Icon())
+		statusColor = ui.Yellow
 	case task.Done:
-		statusIcon = statusDoneStyle.Render(t.Status.Icon())
+		statusColor = ui.Green
 	default:
-		statusIcon = statusPendingStyle.Render(t.Status.Icon())
+		statusColor = ui.Gray
 	}
+	statusIcon := lipgloss.NewStyle().Foreground(statusColor).Render(t.Status.Icon())
 
 	// Priority label
-	var prioLabel string
+	var prioColor lipgloss.Color
 	switch t.Priority {
 	case task.Urgent:
-		prioLabel = priorityUrgentStyle.Render(t.Priority.Label())
+		prioColor = ui.Magenta
 	case task.High:
-		prioLabel = priorityHighStyle.Render(t.Priority.Label())
+		prioColor = ui.Red
 	case task.Medium:
-		prioLabel = priorityMedStyle.Render(t.Priority.Label())
+		prioColor = ui.Yellow
 	default:
-		prioLabel = priorityLowStyle.Render(t.Priority.Label())
+		prioColor = ui.Green
 	}
+	prioLabel := lipgloss.NewStyle().Foreground(prioColor).Render(t.Priority.Label())
 
 	// Title line
-	titleStyle := lipgloss.NewStyle().Foreground(white)
+	titleStyle := lipgloss.NewStyle().Foreground(ui.White)
 	if t.Status == task.Done {
-		titleStyle = titleStyle.Strikethrough(true).Foreground(gray)
+		titleStyle = titleStyle.Strikethrough(true).Foreground(ui.Gray)
 	}
 
 	line1 := fmt.Sprintf(" %s %s %s", statusIcon, prioLabel, titleStyle.Render(t.Title))
@@ -80,12 +84,12 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		}
 		subtitle += fmt.Sprintf("[%d/%d]", done, len(t.Subtasks))
 	}
-	line2 := lipgloss.NewStyle().Foreground(gray).PaddingLeft(5).Render(subtitle)
+	line2 := lipgloss.NewStyle().Foreground(ui.Gray).PaddingLeft(5).Render(subtitle)
 
 	// Cursor / selection
 	if isSelected {
-		cursor := lipgloss.NewStyle().Foreground(cyan).Render("▸")
-		line1 = cursor + line1[1:]
+		cursor := lipgloss.NewStyle().Foreground(ui.Cyan).Render("▸")
+		line1 = cursor + strings.TrimPrefix(line1, " ")
 		line1 = lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(line1)
 		line2 = lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(line2)
 	}

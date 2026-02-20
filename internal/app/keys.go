@@ -3,21 +3,22 @@ package app
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Add       key.Binding
-	Edit      key.Binding
-	Delete    key.Binding
-	Status    key.Binding
-	Subtask   key.Binding
-	ToggleSub key.Binding
-	Search    key.Binding
-	Tab       key.Binding
-	SortDate  key.Binding
-	SortDue   key.Binding
-	SortPrio  key.Binding
-	Help      key.Binding
-	Quit      key.Binding
-	Enter     key.Binding
-	Escape    key.Binding
+	Add        key.Binding
+	Edit       key.Binding
+	Delete     key.Binding
+	Status     key.Binding
+	Subtask    key.Binding
+	Search     key.Binding
+	Tab        key.Binding
+	SortDate   key.Binding
+	SortDue    key.Binding
+	SortPrio   key.Binding
+	Hide       key.Binding
+	ShowHidden key.Binding
+	Help       key.Binding
+	Quit       key.Binding
+	Enter      key.Binding
+	Escape     key.Binding
 }
 
 var keys = keyMap{
@@ -41,10 +42,6 @@ var keys = keyMap{
 		key.WithKeys("t"),
 		key.WithHelp("t", "subtask"),
 	),
-	ToggleSub: key.NewBinding(
-		key.WithKeys("x"),
-		key.WithHelp("x", "toggle sub"),
-	),
 	Search: key.NewBinding(
 		key.WithKeys("/"),
 		key.WithHelp("/", "search"),
@@ -64,6 +61,14 @@ var keys = keyMap{
 	SortPrio: key.NewBinding(
 		key.WithKeys("f3"),
 		key.WithHelp("F3", "sort prio"),
+	),
+	Hide: key.NewBinding(
+		key.WithKeys("h"),
+		key.WithHelp("h", "hide/unhide"),
+	),
+	ShowHidden: key.NewBinding(
+		key.WithKeys("H"),
+		key.WithHelp("H", "show hidden"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("?"),
@@ -88,9 +93,10 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Add, k.Edit, k.Delete},
-		{k.Status, k.Subtask, k.ToggleSub},
+		{k.Status, k.Subtask},
 		{k.Search, k.Tab, k.Help},
 		{k.SortDate, k.SortDue, k.SortPrio},
+		{k.Hide, k.ShowHidden},
 		{k.Quit},
 	}
 }

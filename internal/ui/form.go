@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -16,6 +17,11 @@ type TaskFormData struct {
 	Priority    task.Priority
 	DueDate     string
 	Tags        string
+}
+
+// JournalFormData holds the journal entry form field value.
+type JournalFormData struct {
+	Body string
 }
 
 // NewTaskForm creates a Huh form for adding a new task.
@@ -35,10 +41,10 @@ func NewTaskForm(data *TaskFormData) *huh.Form {
 			huh.NewSelect[task.Priority]().
 				Title("Priority").
 				Options(
-					huh.NewOption("Low", task.Low),
-					huh.NewOption("Medium", task.Medium).Selected(true),
-					huh.NewOption("High", task.High),
-					huh.NewOption("Urgent", task.Urgent),
+					huh.NewOption("Low", task.Low).Selected(data.Priority == task.Low),
+					huh.NewOption("Medium", task.Medium).Selected(data.Priority == task.Medium),
+					huh.NewOption("High", task.High).Selected(data.Priority == task.High),
+					huh.NewOption("Urgent", task.Urgent).Selected(data.Priority == task.Urgent),
 				).
 				Value(&data.Priority),
 
@@ -53,7 +59,7 @@ func NewTaskForm(data *TaskFormData) *huh.Form {
 				Placeholder("comma separated").
 				Value(&data.Tags),
 		),
-	).WithTheme(huh.ThemeDracula()).WithShowHelp(false)
+	).WithTheme(huh.ThemeDracula()).WithShowHelp(true)
 }
 
 // EditTaskForm creates a Huh form for editing an existing task.
@@ -91,7 +97,7 @@ func EditTaskForm(data *TaskFormData) *huh.Form {
 				Placeholder("comma separated").
 				Value(&data.Tags),
 		),
-	).WithTheme(huh.ThemeDracula()).WithShowHelp(false)
+	).WithTheme(huh.ThemeDracula()).WithShowHelp(true)
 }
 
 // SubtaskForm creates a simple single-field form for adding a subtask.
@@ -103,7 +109,28 @@ func SubtaskForm(title *string) *huh.Form {
 				Value(title).
 				Validate(huh.ValidateNotEmpty()),
 		),
-	).WithTheme(huh.ThemeDracula()).WithShowHelp(false)
+	).WithTheme(huh.ThemeDracula()).WithShowHelp(true)
+}
+
+// JournalEntryForm creates a form for adding a journal entry.
+func JournalEntryForm(body *string) *huh.Form {
+	return huh.NewForm(
+		huh.NewGroup(
+			huh.NewText().
+				Title("Journal Entry").
+				Value(body).
+				Lines(5).
+				CharLimit(2000).
+				Validate(validateNotBlank),
+		),
+	).WithTheme(huh.ThemeDracula()).WithShowHelp(true)
+}
+
+func validateNotBlank(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("entry cannot be blank")
+	}
+	return nil
 }
 
 func validateOptionalDate(s string) error {

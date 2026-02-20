@@ -70,13 +70,13 @@ func (p Priority) String() string {
 func (p Priority) Label() string {
 	switch p {
 	case Medium:
-		return "▪▪"
+		return "MED"
 	case High:
-		return "▪▪▪"
+		return "HIGH"
 	case Urgent:
-		return "!!!"
+		return "URG!"
 	default:
-		return "▪"
+		return "LOW"
 	}
 }
 

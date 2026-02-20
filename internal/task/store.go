@@ -3,75 +3,56 @@ package task
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 type Store struct {
 	db *sql.DB
 }
 
-func NewStore() (*Store, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("home dir: %w", err)
-	}
-	dir := filepath.Join(home, ".todo-app")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create dir: %w", err)
-	}
-	dbPath := filepath.Join(dir, "todo.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
-	}
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec("PRAGMA foreign_keys=ON")
-
+// NewStore creates a task store using the provided database connection.
+// The caller is responsible for opening and closing the DB.
+func NewStore(db *sql.DB) (*Store, error) {
 	if err := migrate(db); err != nil {
-		db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
 }
 
 func migrate(db *sql.DB) error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS tasks (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		title       TEXT NOT NULL,
-		description TEXT NOT NULL DEFAULT '',
-		status      INTEGER NOT NULL DEFAULT 0,
-		priority    INTEGER NOT NULL DEFAULT 0,
-		due_date    TEXT,
-		created_at  TEXT NOT NULL,
-		updated_at  TEXT NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS subtasks (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-		title      TEXT NOT NULL,
-		completed  INTEGER NOT NULL DEFAULT 0,
-		position   INTEGER NOT NULL DEFAULT 0
-	);
-	CREATE TABLE IF NOT EXISTS tags (
-		id      INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-		name    TEXT NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
-	CREATE INDEX IF NOT EXISTS idx_tags_task ON tags(task_id);
-	`
-	_, err := db.Exec(schema)
-	return err
-}
-
-func (s *Store) Close() error {
-	return s.db.Close()
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			title       TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status      INTEGER NOT NULL DEFAULT 0,
+			priority    INTEGER NOT NULL DEFAULT 0,
+			due_date    TEXT,
+			created_at  TEXT NOT NULL,
+			updated_at  TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS subtasks (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			title      TEXT NOT NULL,
+			completed  INTEGER NOT NULL DEFAULT 0,
+			position   INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS tags (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			name    TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tags_task ON tags(task_id)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) List() ([]Task, error) {
@@ -89,22 +70,36 @@ func (s *Store) List() ([]Task, error) {
 			return nil, err
 		}
 		if dueDate.Valid {
-			if d, err := time.Parse(time.DateOnly, dueDate.String); err == nil {
-				t.DueDate = &d
+			d, err := time.ParseInLocation(time.DateOnly, dueDate.String, time.Local)
+			if err != nil {
+				return nil, fmt.Errorf("parse task due_date %q: %w", dueDate.String, err)
 			}
+			t.DueDate = &d
 		}
 		if createdAt.Valid {
-			t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
+			parsed, err := time.Parse(time.RFC3339, createdAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse task created_at %q: %w", createdAt.String, err)
+			}
+			t.CreatedAt = parsed
 		}
 		if updatedAt.Valid {
-			t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+			parsed, err := time.Parse(time.RFC3339, updatedAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse task updated_at %q: %w", updatedAt.String, err)
+			}
+			t.UpdatedAt = parsed
 		}
 		tasks = append(tasks, t)
 	}
 
 	for i := range tasks {
-		tasks[i].Subtasks, _ = s.listSubtasks(tasks[i].ID)
-		tasks[i].Tags, _ = s.listTags(tasks[i].ID)
+		if tasks[i].Subtasks, err = s.listSubtasks(tasks[i].ID); err != nil {
+			return nil, fmt.Errorf("list subtasks for task %d: %w", tasks[i].ID, err)
+		}
+		if tasks[i].Tags, err = s.listTags(tasks[i].ID); err != nil {
+			return nil, fmt.Errorf("list tags for task %d: %w", tasks[i].ID, err)
+		}
 	}
 	return tasks, rows.Err()
 }
@@ -144,6 +139,12 @@ func (s *Store) listTags(taskID int64) ([]string, error) {
 }
 
 func (s *Store) Create(t *Task) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	now := time.Now()
 	t.CreatedAt = now
 	t.UpdatedAt = now
@@ -152,25 +153,35 @@ func (s *Store) Create(t *Task) error {
 		d := t.DueDate.Format(time.DateOnly)
 		dueStr = &d
 	}
-	res, err := s.db.Exec(
+	res, err := tx.Exec(
 		`INSERT INTO tasks (title, description, status, priority, due_date, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
 		t.Title, t.Description, t.Status, t.Priority, dueStr, now.Format(time.RFC3339), now.Format(time.RFC3339),
 	)
 	if err != nil {
 		return err
 	}
-	t.ID, _ = res.LastInsertId()
-	return s.saveTags(t.ID, t.Tags)
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("last insert id: %w", err)
+	}
+	t.ID = id
+
+	if err := saveTagsTx(tx, t.ID, t.Tags); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-func (s *Store) saveTags(taskID int64, tags []string) error {
-	s.db.Exec(`DELETE FROM tags WHERE task_id = ?`, taskID)
+func saveTagsTx(tx *sql.Tx, taskID int64, tags []string) error {
+	if _, err := tx.Exec(`DELETE FROM tags WHERE task_id = ?`, taskID); err != nil {
+		return fmt.Errorf("delete tags: %w", err)
+	}
 	for _, tag := range tags {
 		tag = strings.TrimSpace(tag)
 		if tag == "" {
 			continue
 		}
-		if _, err := s.db.Exec(`INSERT INTO tags (task_id, name) VALUES (?,?)`, taskID, tag); err != nil {
+		if _, err := tx.Exec(`INSERT INTO tags (task_id, name) VALUES (?,?)`, taskID, tag); err != nil {
 			return err
 		}
 	}
@@ -178,20 +189,29 @@ func (s *Store) saveTags(taskID int64, tags []string) error {
 }
 
 func (s *Store) Update(t *Task) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	t.UpdatedAt = time.Now()
 	var dueStr *string
 	if t.DueDate != nil {
 		d := t.DueDate.Format(time.DateOnly)
 		dueStr = &d
 	}
-	_, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`UPDATE tasks SET title=?, description=?, status=?, priority=?, due_date=?, updated_at=? WHERE id=?`,
 		t.Title, t.Description, t.Status, t.Priority, dueStr, t.UpdatedAt.Format(time.RFC3339), t.ID,
-	)
-	if err != nil {
+	); err != nil {
 		return err
 	}
-	return s.saveTags(t.ID, t.Tags)
+
+	if err := saveTagsTx(tx, t.ID, t.Tags); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Delete(id int64) error {
@@ -201,13 +221,20 @@ func (s *Store) Delete(id int64) error {
 
 func (s *Store) AddSubtask(taskID int64, title string) error {
 	var maxPos int
-	s.db.QueryRow(`SELECT COALESCE(MAX(position), -1) FROM subtasks WHERE task_id = ?`, taskID).Scan(&maxPos)
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(position), -1) FROM subtasks WHERE task_id = ?`, taskID).Scan(&maxPos); err != nil {
+		return fmt.Errorf("get max position: %w", err)
+	}
 	_, err := s.db.Exec(`INSERT INTO subtasks (task_id, title, position) VALUES (?,?,?)`, taskID, title, maxPos+1)
 	return err
 }
 
 func (s *Store) ToggleSubtask(id int64) error {
 	_, err := s.db.Exec(`UPDATE subtasks SET completed = NOT completed WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) UpdateSubtask(id int64, title string) error {
+	_, err := s.db.Exec(`UPDATE subtasks SET title = ? WHERE id = ?`, title, id)
 	return err
 }
 
