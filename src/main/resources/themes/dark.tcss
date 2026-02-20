@@ -1,0 +1,86 @@
+$accent: cyan;
+$bg: black;
+$fg: white;
+$border: gray;
+$border-focus: cyan;
+$done: green;
+$overdue: red;
+$priority-low: green;
+$priority-medium: yellow;
+$priority-high: red;
+$priority-urgent: bright-magenta;
+
+Panel {
+    border-type: rounded;
+    border-color: $border;
+    &:focus {
+        border-color: $border-focus;
+    }
+}
+
+#header {
+    border-type: rounded;
+    border-color: $accent;
+}
+
+TabsElement-tab {
+    color: gray;
+}
+
+TabsElement-tab:selected {
+    color: $accent;
+    text-style: bold reversed;
+}
+
+#task-list {
+    border-color: $border;
+    &:focus {
+        border-color: $border-focus;
+    }
+}
+
+ListElement-item {
+    color: $fg;
+}
+
+ListElement-item:selected {
+    background: $accent;
+    color: black;
+    text-style: bold;
+}
+
+#task-detail {
+    border-color: $border;
+}
+
+#status-bar {
+    color: gray;
+    text-style: dim;
+}
+
+#search-input {
+    border-type: rounded;
+    border-color: $border;
+    &:focus {
+        border-color: $accent;
+    }
+}
+
+TextInputElement-placeholder {
+    color: gray;
+    text-style: italic;
+}
+
+.priority-low { color: $priority-low; }
+.priority-medium { color: $priority-medium; }
+.priority-high { color: $priority-high; }
+.priority-urgent { color: $priority-urgent; text-style: bold; }
+
+.status-done { color: $done; }
+.status-overdue { color: $overdue; text-style: bold; }
+
+#dialog {
+    border-type: double;
+    border-color: $accent;
+    background: black;
+}
