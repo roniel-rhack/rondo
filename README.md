@@ -55,9 +55,19 @@ mv rondo /usr/local/bin/
 - **Status workflow** — Pending, In Progress, Done
 - **Priority levels** — Low, Medium, High, Urgent (color-coded)
 - **Due dates** with sort support
-- **Tags** for organization
+- **Tags** — comma-separated, filterable with tag bar (`F4`)
+- **Recurring tasks** — daily, weekly, monthly, or yearly recurrence
+- **Task dependencies** — mark tasks as blocked by others
+- **Time logging** — log time spent on tasks from the detail panel
 - **Sorting** by creation date, due date, or priority (`F1`/`F2`/`F3`)
 - **Fuzzy search** — filter tasks with `/`
+
+### Productivity Tools
+
+- **Focus timer** — 25-minute Pomodoro sessions with live countdown (`p`)
+- **Statistics overlay** — task counts, priority breakdown, tag cloud, focus sessions, journal streak (`G`)
+- **Export** — Markdown or JSON, with optional journal inclusion (`X`)
+- **Undo** — revert the last destructive action (`Ctrl+Z`)
 
 ### Daily Journal
 
@@ -70,12 +80,27 @@ mv rondo /usr/local/bin/
 ### Interface
 
 - **Two-panel layout** — list + detail with `1`/`2` focus switching
+- **Resizable panels** — adjust split ratio with `<`/`>`
 - **Four tabs** — All, Active, Done, Journal (live counts)
 - **Vim-style navigation** — `j`/`k` everywhere
 - **Context-sensitive status bar** — keybinding hints update per panel
 - **Modal forms** — Huh-powered with Dracula theme
 - **Confirmation dialogs** for all destructive actions
 - **Help overlay** — `?` for full keybinding reference
+- **Config file** — persistent settings at `~/.todo-app/config.json`
+- **Auto backups** — daily SQLite backups at `~/.todo-app/backups/`
+
+### CLI Mode
+
+Run subcommands directly from the terminal without entering the TUI:
+
+```bash
+rondo add "Buy groceries"          # Add a task
+rondo done 3                       # Mark task #3 as done
+rondo list                         # List tasks
+rondo journal "Productive day"     # Add journal entry
+rondo export                       # Export data
+```
 
 ## Keyboard Shortcuts
 
@@ -85,8 +110,13 @@ mv rondo /usr/local/bin/
 |-----|--------|
 | `Tab` | Switch tabs |
 | `1` / `2` | Focus left / right panel |
+| `<` / `>` | Resize panels |
 | `Esc` | Return to list / clear filter |
 | `?` | Help overlay |
+| `p` | Focus timer (start / cancel) |
+| `X` | Export |
+| `G` | Statistics |
+| `Ctrl+Z` | Undo last action |
 | `q` | Quit |
 
 ### Tasks — Panel 1
@@ -101,6 +131,7 @@ mv rondo /usr/local/bin/
 | `t` | Add subtask |
 | `/` | Search |
 | `F1`/`F2`/`F3` | Sort by created / due / priority |
+| `F4` | Toggle tag filter bar |
 
 ### Tasks — Panel 2 (Details)
 
@@ -111,6 +142,8 @@ mv rondo /usr/local/bin/
 | `e` | Edit subtask |
 | `d` | Delete subtask |
 | `s` | Toggle subtask |
+| `l` | Log time |
+| `b` | View blockers |
 
 ### Journal — Panel 1 (Notes)
 
@@ -134,23 +167,41 @@ mv rondo /usr/local/bin/
 ## Architecture
 
 ```
-cmd/todo/main.go                # Entry point
+cmd/todo/main.go                # Entry point (TUI + CLI dispatch)
 internal/
   app/
     model.go                    # Main Bubbletea Model + Update + View
     model_journal.go            # Journal tab handlers
+    model_forms.go              # Form submission + confirmation dialogs
+    model_overlays.go           # Help, stats, blocker overlays + panel renderer
+    model_tasks.go              # Task list helpers (filter, sort, reload, export)
+    model_features.go           # Feature handlers (focus, tags, undo, blockers)
     keys.go                     # Keybinding definitions
     styles.go                   # Lip Gloss styles
     delegate.go                 # Task list item delegate
     delegate_journal.go         # Journal note list item delegate
+  cli/
+    cli.go                      # CLI subcommand dispatcher
+    tasks.go                    # add, done, list commands
+    journal.go                  # journal command
+    export.go                   # export command
+  config/
+    config.go                   # JSON config (~/.todo-app/config.json)
   database/
-    db.go                       # SQLite connection setup
+    db.go                       # SQLite connection + backup
+  export/
+    export.go                   # Markdown + JSON export writers
+  focus/
+    focus.go                    # Focus/Pomodoro session model
+    store.go                    # Focus session SQLite repository
   journal/
     journal.go                  # Note & Entry domain types
     store.go                    # Journal SQLite repository
   task/
     task.go                     # Task & Subtask domain types
     store.go                    # Task SQLite repository
+    recur.go                    # Recurring task logic
+    timelog.go                  # Time log model
   ui/
     colors.go                   # Shared color palette
     views.go                    # Rendering (tabs, detail, status bar, dialogs)
