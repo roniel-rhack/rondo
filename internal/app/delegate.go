@@ -77,7 +77,19 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		titleStyle = titleStyle.Strikethrough(true).Foreground(ui.Gray)
 	}
 
-	line1 := fmt.Sprintf(" %s %s %s%s%s", statusIcon, prioLabel, titleStyle.Render(t.Title), recurIcon, blockedBadge)
+	availWidth := m.Width()
+
+	// Build prefix and suffix, then allocate remaining space to the title
+	prefix := fmt.Sprintf(" %s %s ", statusIcon, prioLabel)
+	prefixWidth := lipgloss.Width(prefix)
+
+	suffix := recurIcon + blockedBadge
+	suffixWidth := lipgloss.Width(suffix)
+
+	maxTitleWidth := max(availWidth-prefixWidth-suffixWidth, 4)
+	renderedTitle := titleStyle.MaxWidth(maxTitleWidth).Render(t.Title)
+
+	line1 := prefix + renderedTitle + suffix
 
 	// Subtitle line: due date (with overdue styling) + subtask count
 	var subtitle string
@@ -102,14 +114,15 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		}
 		subtitle += lipgloss.NewStyle().Foreground(ui.Gray).Render(fmt.Sprintf("[%d/%d]", done, len(t.Subtasks)))
 	}
-	line2 := lipgloss.NewStyle().PaddingLeft(5).Render(subtitle)
+	line2 := lipgloss.NewStyle().PaddingLeft(5).MaxWidth(availWidth).Render(subtitle)
 
 	// Cursor / selection
 	if isSelected {
 		cursor := lipgloss.NewStyle().Foreground(ui.Cyan).Render("▸")
 		line1 = cursor + strings.TrimPrefix(line1, " ")
-		line1 = lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(line1)
-		line2 = lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Render(line2)
+		selStyle := lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e")).Width(availWidth)
+		line1 = selStyle.Render(line1)
+		line2 = selStyle.Render(line2)
 	}
 
 	fmt.Fprintf(w, "%s\n%s", line1, line2)

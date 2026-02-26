@@ -235,6 +235,7 @@ Database at `~/.todo-app/todo.db` with tables:
 - **No Laziness**: Find root causes. No temporary fixes
 - **Minimal Impact**: Changes should only touch what's necessary
 - **Test Everything**: Verify behavior manually and with tests
+- **Fix All Failures**: If a test or problem is found, fix it regardless of when it was introduced — no ignoring pre-existing issues
 - **Consistent Style**: Follow Go conventions, keep packages focused
 - **No AI Attribution**: Never reference Claude, AI, or any assistant in commit messages, code comments, or any project file
 

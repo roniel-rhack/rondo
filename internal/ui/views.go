@@ -78,8 +78,9 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 
 	var sections []string
 
-	// Title
-	sections = append(sections, labelStyle.Render("Title")+titleStyle.Render(t.Title))
+	// Title (wrap long titles to fill available width)
+	titleWidth := max(width-lipgloss.Width(labelStyle.Render("")), 10)
+	sections = append(sections, labelStyle.Render("Title")+titleStyle.Width(titleWidth).Render(t.Title))
 	sections = append(sections, "")
 
 	// Status

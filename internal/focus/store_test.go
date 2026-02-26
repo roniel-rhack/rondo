@@ -248,7 +248,7 @@ func TestCompletionsByDay(t *testing.T) {
 		t.Fatalf("CompletionsByDay: %v", err)
 	}
 
-	today := now.Format(time.DateOnly)
+	today := now.UTC().Format(time.DateOnly)
 	if result[today] != 2 {
 		t.Errorf("expected 2 completions today, got %d", result[today])
 	}

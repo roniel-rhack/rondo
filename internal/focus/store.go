@@ -43,14 +43,14 @@ func migrate(db *sql.DB) error {
 func (s *Store) Create(session *Session) error {
 	var completedAt *string
 	if session.CompletedAt != nil {
-		v := session.CompletedAt.Format(time.RFC3339)
+		v := session.CompletedAt.UTC().Format(time.RFC3339)
 		completedAt = &v
 	}
 	res, err := s.db.Exec(
 		`INSERT INTO focus_sessions (task_id, duration, started_at, completed_at) VALUES (?,?,?,?)`,
 		session.TaskID,
 		int64(session.Duration),
-		session.StartedAt.Format(time.RFC3339),
+		session.StartedAt.UTC().Format(time.RFC3339),
 		completedAt,
 	)
 	if err != nil {
@@ -66,7 +66,7 @@ func (s *Store) Create(session *Session) error {
 
 // Complete marks a session as completed by setting completed_at to now.
 func (s *Store) Complete(id int64) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.Exec(`UPDATE focus_sessions SET completed_at = ? WHERE id = ?`, now, id)
 	if err != nil {
 		return fmt.Errorf("complete focus session: %w", err)
@@ -106,7 +106,7 @@ func (s *Store) ListByTask(taskID int64) ([]Session, error) {
 // CompletionsByDay returns the count of completed sessions per day for the
 // last N days, keyed by "YYYY-MM-DD".
 func (s *Store) CompletionsByDay(days int) (map[string]int, error) {
-	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 	rows, err := s.db.Query(
 		`SELECT DATE(completed_at) AS day, COUNT(*) FROM focus_sessions
 		 WHERE completed_at IS NOT NULL AND completed_at >= ?
@@ -132,7 +132,7 @@ func (s *Store) CompletionsByDay(days int) (map[string]int, error) {
 
 // TodayCount returns the number of sessions completed today.
 func (s *Store) TodayCount() (int, error) {
-	today := time.Now().Format(time.DateOnly)
+	today := time.Now().UTC().Format(time.DateOnly)
 	var count int
 	err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM focus_sessions WHERE completed_at IS NOT NULL AND DATE(completed_at) = ?`,
