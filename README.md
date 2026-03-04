@@ -298,9 +298,9 @@ rondo config set datetime_format "02.01.2006 15:04"
 ```
 
 Presets:
-- `date_format`: `iso`, `european` (`eu`), `us`
-- `time_format`: `24h`, `12h`
-- `datetime_format`: `iso`, `european` (`eu`), `us`
+- `date_format`: `pretty` (default), `iso`, `european` (`eu`), `us`
+- `time_format`: `12h` (default), `24h`
+- `datetime_format`: `pretty` (default), `iso`, `european` (`eu`), `us`
 
 Examples:
 - `02.01.2006` → `31.12.2026`
