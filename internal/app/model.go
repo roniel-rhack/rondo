@@ -60,7 +60,7 @@ const (
 type focusPhase int
 
 const (
-	phaseIdle      focusPhase = iota
+	phaseIdle focusPhase = iota
 	phaseWork
 	phaseBreak
 	phaseWorkDone
@@ -186,7 +186,7 @@ func (m *Model) setError(err error) tea.Cmd {
 
 // New creates a new Model backed by the given stores.
 func New(store *task.Store, journalStore *journal.Store, focusStore *focus.Store, cfg config.Config) Model {
-	delegate := newTaskDelegate()
+	delegate := newTaskDelegate(cfg)
 	l := list.New(nil, delegate, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowHelp(false)
@@ -195,7 +195,7 @@ func New(store *task.Store, journalStore *journal.Store, focusStore *focus.Store
 	l.SetShowFilter(false)
 	l.DisableQuitKeybindings()
 
-	jDelegate := newNoteDelegate()
+	jDelegate := newNoteDelegate(cfg)
 	jl := list.New(nil, jDelegate, 0, 0)
 	jl.SetShowTitle(false)
 	jl.SetShowHelp(false)
@@ -214,18 +214,18 @@ func New(store *task.Store, journalStore *journal.Store, focusStore *focus.Store
 	}
 
 	return Model{
-		store:        store,
-		journalStore: journalStore,
-		focusStore:   focusStore,
-		cfg:          cfg,
-		panelRatio:   cfg.PanelRatio,
-		list:         l,
-		journalList:  jl,
-		viewport:     vp,
+		store:           store,
+		journalStore:    journalStore,
+		focusStore:      focusStore,
+		cfg:             cfg,
+		panelRatio:      cfg.PanelRatio,
+		list:            l,
+		journalList:     jl,
+		viewport:        vp,
 		journalViewport: jvp,
-		help:         h,
-		activeTab:    1, // Default to Active tab
-		focusCyclePos: focusCyclePos,
+		help:            h,
+		activeTab:       1, // Default to Active tab
+		focusCyclePos:   focusCyclePos,
 	}
 }
 
@@ -666,16 +666,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-
-
-
-
-
-
-
-
-
-
 // View renders the entire application UI.
 func (m Model) View() string {
 	if !m.ready {
@@ -933,10 +923,3 @@ func (m *Model) switchTab() {
 		m.updateJournalDetail()
 	}
 }
-
-
-
-
-
-
-

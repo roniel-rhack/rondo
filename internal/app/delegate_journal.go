@@ -9,14 +9,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/roniel/todo-app/internal/config"
 	"github.com/roniel/todo-app/internal/journal"
 	"github.com/roniel/todo-app/internal/ui"
 )
 
-type noteDelegate struct{}
+// noteItem wraps a journal.Note with a pre-computed title used for both
+// display rendering and list filtering.
+type noteItem struct {
+	journal.Note
+	title string
+}
 
-func newNoteDelegate() noteDelegate {
-	return noteDelegate{}
+func (n noteItem) FilterValue() string { return n.title }
+
+type noteDelegate struct {
+	cfg config.Config
+}
+
+func newNoteDelegate(cfg config.Config) noteDelegate {
+	return noteDelegate{cfg: cfg}
 }
 
 func (d noteDelegate) Height() int  { return 1 }
@@ -25,15 +37,16 @@ func (d noteDelegate) Spacing() int { return 0 }
 func (d noteDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d noteDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	n, ok := item.(journal.Note)
+	ni, ok := item.(noteItem)
 	if !ok {
 		return
 	}
+	n := ni.Note
 
 	isSelected := index == m.Index()
 	availWidth := m.Width()
 
-	dateLabel := n.DateTitle()
+	dateLabel := ni.title
 	countLabel := fmt.Sprintf("%d entries", len(n.Entries))
 
 	if n.Hidden {

@@ -284,6 +284,29 @@ rondo completion zsh
 | `~/.todo-app/config.json` | Persistent settings |
 | `~/.todo-app/backups/` | Daily auto-backups |
 
+Date/time display is configurable via `rondo config` (Go time layouts):
+
+```bash
+rondo config set date_format european
+rondo config set time_format 24h
+rondo config set datetime_format iso
+
+# Or use custom Go layouts
+rondo config set date_format "02.01.2006"
+rondo config set time_format "15:04"
+rondo config set datetime_format "02.01.2006 15:04"
+```
+
+Presets:
+- `date_format`: `pretty` (default), `iso`, `european` (`eu`), `us`
+- `time_format`: `12h` (default), `24h`
+- `datetime_format`: `pretty` (default), `iso`, `european` (`eu`), `us`
+
+Examples:
+- `02.01.2006` → `31.12.2026`
+- `2006-01-02` → `2026-12-31`
+- `03:04 PM` → `09:07 PM`
+
 ## Development
 
 Requires **Go 1.23+**.

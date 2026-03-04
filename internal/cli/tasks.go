@@ -183,7 +183,7 @@ func (c *CLI) showCmd() *cobra.Command {
 			case "json":
 				return printTaskJSON(os.Stdout, t)
 			default:
-				return printTaskDetail(c.printer(os.Stdout), t)
+				return c.printTaskDetail(c.printer(os.Stdout), t)
 			}
 		},
 	}
@@ -408,7 +408,7 @@ func (c *CLI) listCmd() *cobra.Command {
 			case "json":
 				return printTasksJSON(os.Stdout, filtered)
 			default:
-				return printTasksTable(c.printer(os.Stdout), filtered)
+				return c.printTasksTable(c.printer(os.Stdout), filtered)
 			}
 		},
 	}
@@ -563,12 +563,12 @@ func filterByStatus(tasks []task.Task, s task.Status) []task.Task {
 	return out
 }
 
-func printTasksTable(p *Printer, tasks []task.Task) error {
+func (c *CLI) printTasksTable(p *Printer, tasks []task.Task) error {
 	rows := make([][]string, 0, len(tasks))
 	for _, t := range tasks {
 		due := "-"
 		if t.DueDate != nil {
-			due = t.DueDate.Format("2006-01-02")
+			due = c.cfg.FormatDate(*t.DueDate)
 		}
 		tags := "-"
 		if len(t.Tags) > 0 {
@@ -611,12 +611,12 @@ func formatPriority(p *Printer, pr task.Priority) string {
 	}
 }
 
-func printTaskDetail(p *Printer, t *task.Task) error {
+func (c *CLI) printTaskDetail(p *Printer, t *task.Task) error {
 	w := p.w
 
 	due := "-"
 	if t.DueDate != nil {
-		due = t.DueDate.Format("2006-01-02")
+		due = c.cfg.FormatDate(*t.DueDate)
 	}
 	tags := "-"
 	if len(t.Tags) > 0 {
@@ -656,8 +656,8 @@ func printTaskDetail(p *Printer, t *task.Task) error {
 			{label("Subtasks"), subtaskStr},
 			{label("Blockers"), blockers},
 			{label("Time Logged"), task.FormatDuration(task.TotalDuration(t.TimeLogs))},
-			{label("Created"), t.CreatedAt.Format("2006-01-02 15:04")},
-			{label("Updated"), t.UpdatedAt.Format("2006-01-02 15:04")},
+			{label("Created"), c.cfg.FormatDateTime(t.CreatedAt)},
+			{label("Updated"), c.cfg.FormatDateTime(t.UpdatedAt)},
 		},
 	)
 
@@ -682,7 +682,7 @@ func printTaskDetail(p *Printer, t *task.Task) error {
 				note = " — " + tl.Note
 			}
 			fmt.Fprintf(w, "  %s  %s%s\n",
-				p.Dim(tl.LoggedAt.Format("2006-01-02 15:04")),
+				p.Dim(c.cfg.FormatDateTime(tl.LoggedAt)),
 				task.FormatDuration(tl.Duration),
 				note,
 			)

@@ -54,10 +54,13 @@ func main() {
 	}
 
 	// Load config early so it's available to both CLI and TUI.
-	cfg, err := config.Load()
+	cfg, warnings, err := config.LoadWithWarnings()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: config load failed: %v\n", err)
 		cfg = config.DefaultConfig()
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
 	}
 
 	// CLI subcommands: if args are provided, dispatch to CLI instead of TUI.

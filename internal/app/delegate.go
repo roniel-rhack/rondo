@@ -10,14 +10,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/roniel/todo-app/internal/config"
 	"github.com/roniel/todo-app/internal/task"
 	"github.com/roniel/todo-app/internal/ui"
 )
 
-type taskDelegate struct{}
+type taskDelegate struct {
+	cfg config.Config
+}
 
-func newTaskDelegate() taskDelegate {
-	return taskDelegate{}
+func newTaskDelegate(cfg config.Config) taskDelegate {
+	return taskDelegate{cfg: cfg}
 }
 
 func (d taskDelegate) Height() int  { return 2 }
@@ -95,7 +98,8 @@ func (d taskDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	var subtitle string
 	if t.DueDate != nil {
 		level := ui.DueStatus(*t.DueDate)
-		dueStr := fmt.Sprintf("due %s", t.DueDate.Format("Jan 02"))
+		dueDate := d.cfg.FormatDate(*t.DueDate)
+		dueStr := fmt.Sprintf("due %s", dueDate)
 		badge := ui.DueBadge(level)
 		if badge != "" {
 			dueStr += " " + badge

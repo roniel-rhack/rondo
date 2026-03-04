@@ -63,7 +63,7 @@ note (backward-compatible shorthand for 'journal add').`,
 				return fmt.Errorf("add entry: %w", err)
 			}
 			p := c.printer(os.Stdout)
-			p.Success("Added journal entry to %s", note.Date.Format("2006-01-02"))
+			p.Success("Added journal entry to %s", c.cfg.FormatDate(note.Date))
 			return nil
 		},
 	}
@@ -116,7 +116,7 @@ func (c *CLI) journalAddCmd() *cobra.Command {
 			}
 
 			p := c.printer(os.Stdout)
-			p.Success("Added journal entry to %s", noteDate.Format("2006-01-02"))
+			p.Success("Added journal entry to %s", c.cfg.FormatDate(noteDate))
 			return nil
 		},
 	}
@@ -159,7 +159,7 @@ func (c *CLI) journalListCmd() *cobra.Command {
 			case "json":
 				return printNotesJSON(os.Stdout, notes)
 			default:
-				return printNotesTable(c.printer(os.Stdout), notes)
+				return c.printNotesTable(c.printer(os.Stdout), notes)
 			}
 		},
 	}
@@ -205,7 +205,7 @@ func (c *CLI) journalShowCmd() *cobra.Command {
 			case "json":
 				return printEntriesJSON(os.Stdout, n.Date, entries)
 			default:
-				return printEntriesTable(c.printer(os.Stdout), n.Date, entries)
+				return c.printEntriesTable(c.printer(os.Stdout), n.Date, entries)
 			}
 		},
 	}
@@ -338,14 +338,15 @@ func printNotesJSON(w io.Writer, notes []journal.Note) error {
 	return enc.Encode(out)
 }
 
-func printNotesTable(p *Printer, notes []journal.Note) error {
+func (c *CLI) printNotesTable(p *Printer, notes []journal.Note) error {
+	now := time.Now()
 	rows := make([][]string, 0, len(notes))
 	for _, n := range notes {
 		hidden := "no"
 		if n.Hidden {
 			hidden = "yes"
 		}
-		rows = append(rows, []string{n.DateTitle(), fmt.Sprintf("%d", len(n.Entries)), hidden})
+		rows = append(rows, []string{c.cfg.FormatNoteTitle(n.Date, now), fmt.Sprintf("%d", len(n.Entries)), hidden})
 	}
 	p.Table([]string{"DATE", "ENTRIES", "HIDDEN"}, rows)
 	return nil
@@ -369,8 +370,8 @@ func printEntriesJSON(w io.Writer, date time.Time, entries []journal.Entry) erro
 	return enc.Encode(out)
 }
 
-func printEntriesTable(p *Printer, date time.Time, entries []journal.Entry) error {
-	fmt.Fprintf(p.w, "%s %s\n\n", p.Bold("Date:"), date.Format("2006-01-02"))
+func (c *CLI) printEntriesTable(p *Printer, date time.Time, entries []journal.Entry) error {
+	fmt.Fprintf(p.w, "%s %s\n\n", p.Bold("Date:"), c.cfg.FormatDate(date))
 	if len(entries) == 0 {
 		fmt.Fprintln(p.w, p.Dim("(no entries)"))
 		return nil
@@ -379,7 +380,7 @@ func printEntriesTable(p *Printer, date time.Time, entries []journal.Entry) erro
 	for _, e := range entries {
 		rows = append(rows, []string{
 			fmt.Sprintf("%d", e.ID),
-			e.CreatedAt.Format("15:04"),
+			c.cfg.FormatTime(e.CreatedAt),
 			e.Body,
 		})
 	}

@@ -81,13 +81,13 @@ func (c *CLI) statsCmd() *cobra.Command {
 					},
 				})
 			default:
-				return printStatsTable(c.printer(os.Stdout), pending, active, done, priCounts, todayWork, goal, streak, totalMin)
+				return c.printStatsTable(c.printer(os.Stdout), pending, active, done, priCounts, todayWork, goal, streak, totalMin)
 			}
 		},
 	}
 }
 
-func printStatsTable(p *Printer, pending, active, done int, priCounts map[string]int,
+func (c *CLI) printStatsTable(p *Printer, pending, active, done int, priCounts map[string]int,
 	todayWork, goal, streak, totalMin int) error {
 
 	fmt.Fprintln(p.w, p.Bold("TASKS"))
@@ -127,7 +127,7 @@ func printStatsTable(p *Printer, pending, active, done int, priCounts map[string
 			{"Today", fmt.Sprintf("%d / %d (goal)", todayWork, goal)},
 			{"Streak", fmt.Sprintf("%d days", streak)},
 			{"Total focused", totalFmt},
-			{"As of", time.Now().Format("2006-01-02")},
+			{"As of", c.cfg.FormatDate(time.Now())},
 		},
 	)
 

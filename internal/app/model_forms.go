@@ -269,7 +269,8 @@ func (m *Model) submitTaskForm() tea.Cmd {
 	recurFreq := task.ParseRecurFreq(m.formData.RecurFreq)
 
 	var statusCmd tea.Cmd
-	if m.mode == modeAdd {
+	switch m.mode {
+	case modeAdd:
 		t := &task.Task{
 			Title:         m.formData.Title,
 			Description:   m.formData.Description,
@@ -287,7 +288,7 @@ func (m *Model) submitTaskForm() tea.Cmd {
 			}
 			statusCmd = m.setStatus("Task created")
 		}
-	} else if m.mode == modeEdit {
+	case modeEdit:
 		selected := m.selectedTask()
 		if selected != nil {
 			selected.Title = m.formData.Title

@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/roniel/todo-app/internal/config"
 	"github.com/roniel/todo-app/internal/journal"
 	"github.com/roniel/todo-app/internal/task"
 )
@@ -66,7 +67,7 @@ func RenderTabs(activeTab int, allCount, activeCount, doneCount, journalCount in
 // RenderDetail renders the task detail panel content.
 // subtaskIdx indicates which subtask has the cursor (-1 for none).
 // detailFocused controls whether the subtask cursor is shown.
-func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) string {
+func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool, cfg config.Config) string {
 	if t == nil {
 		return lipgloss.NewStyle().
 			Foreground(Gray).
@@ -104,15 +105,12 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 	// Due date with overdue badge
 	if t.DueDate != nil {
 		level := DueStatus(*t.DueDate)
-		dateStr := t.DueDate.Format("Jan 02, 2006")
+		dateStr := cfg.FormatDate(*t.DueDate)
 		badge := DueBadge(level)
 		if badge != "" {
 			dateStr += " " + DueStyle(level).Render(badge)
 		}
-		sections = append(sections, labelStyle().Render("Due")+DueStyle(level).Render(t.DueDate.Format("Jan 02, 2006")))
-		if badge != "" {
-			sections[len(sections)-1] = labelStyle().Render("Due") + DueStyle(level).Render(t.DueDate.Format("Jan 02, 2006")) + " " + DueStyle(level).Render(badge)
-		}
+		sections = append(sections, labelStyle().Render("Due")+DueStyle(level).Render(dateStr))
 	}
 
 	// Recurrence
@@ -125,7 +123,8 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 	}
 
 	// Created
-	sections = append(sections, labelStyle().Render("Created")+valueStyle().Render(t.CreatedAt.Format("Jan 02, 2006")))
+	created := cfg.FormatDate(t.CreatedAt)
+	sections = append(sections, labelStyle().Render("Created")+valueStyle().Render(created))
 
 	// Tags
 	if len(t.Tags) > 0 {
@@ -178,7 +177,7 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool) s
 
 // RenderJournalDetail renders the journal note detail panel content.
 // entryIdx indicates which entry has the cursor. detailFocused controls whether the cursor is shown.
-func RenderJournalDetail(note *journal.Note, width int, entryIdx int, detailFocused bool) string {
+func RenderJournalDetail(note *journal.Note, width int, entryIdx int, detailFocused bool, cfg config.Config) string {
 	if note == nil {
 		return lipgloss.NewStyle().
 			Foreground(Gray).
@@ -190,7 +189,7 @@ func RenderJournalDetail(note *journal.Note, width int, entryIdx int, detailFocu
 	var sections []string
 
 	// Date title.
-	dateTitle := titleStyle().Render(note.Date.Format("Mon, Jan 02 2006"))
+	dateTitle := titleStyle().Render(cfg.FormatDetailDate(note.Date))
 	if note.Hidden {
 		badge := lipgloss.NewStyle().Foreground(Yellow).Render(" [hidden]")
 		dateTitle += badge
@@ -209,7 +208,8 @@ func RenderJournalDetail(note *journal.Note, width int, entryIdx int, detailFocu
 			if detailFocused && i == entryIdx {
 				prefix = lipgloss.NewStyle().Foreground(Cyan).Render("▸ ")
 			}
-			timestamp := prefix + lipgloss.NewStyle().Bold(true).Foreground(Cyan).Render(entry.CreatedAt.Format("3:04 PM"))
+			ts := cfg.FormatTime(entry.CreatedAt)
+			timestamp := prefix + lipgloss.NewStyle().Bold(true).Foreground(Cyan).Render(ts)
 			sections = append(sections, timestamp)
 			sections = append(sections, "  "+RenderMarkdown(entry.Body, width-4))
 			if i < len(note.Entries)-1 {

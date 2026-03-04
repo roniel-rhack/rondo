@@ -112,7 +112,7 @@ func (m *Model) updateDetail() {
 	} else if m.subtaskIdx >= len(selected.Subtasks) {
 		m.subtaskIdx = len(selected.Subtasks) - 1
 	}
-	content := ui.RenderDetail(selected, m.viewport.Width, m.subtaskIdx, m.focusedPanel == 1)
+	content := ui.RenderDetail(selected, m.viewport.Width, m.subtaskIdx, m.focusedPanel == 1, m.cfg)
 	m.viewport.SetContent(content)
 	m.viewport.GotoTop()
 }

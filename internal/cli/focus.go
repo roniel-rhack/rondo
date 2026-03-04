@@ -116,7 +116,7 @@ func (c *CLI) focusStatusCmd() *cobra.Command {
 					[][]string{
 						{"Today", fmt.Sprintf("%d / %d (goal)", todayWork, goal)},
 						{"Streak", fmt.Sprintf("%d days", streak)},
-						{"Date", time.Now().Format("2006-01-02")},
+						{"Date", c.cfg.FormatDate(time.Now())},
 					},
 				)
 				return nil

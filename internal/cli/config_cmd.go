@@ -35,6 +35,42 @@ var configKeys = map[string]configKey{
 			return nil
 		},
 	},
+	"date_format": {
+		description: "Date format (Go layout or preset: iso, european, us)",
+		get:         func(c config.Config) string { return c.DateFormat },
+		set: func(c *config.Config, val string) error {
+			val = config.ResolvePreset(val, config.DateFormatPresets)
+			if err := config.ValidateTimeLayout(val); err != nil {
+				return fmt.Errorf("date_format: %w", err)
+			}
+			c.DateFormat = val
+			return nil
+		},
+	},
+	"time_format": {
+		description: "Time format (Go layout or preset: 24h, 12h)",
+		get:         func(c config.Config) string { return c.TimeFormat },
+		set: func(c *config.Config, val string) error {
+			val = config.ResolvePreset(val, config.TimeFormatPresets)
+			if err := config.ValidateTimeLayout(val); err != nil {
+				return fmt.Errorf("time_format: %w", err)
+			}
+			c.TimeFormat = val
+			return nil
+		},
+	},
+	"datetime_format": {
+		description: "Date+time format (Go layout or preset: iso, european, us)",
+		get:         func(c config.Config) string { return c.DateTimeFormat },
+		set: func(c *config.Config, val string) error {
+			val = config.ResolvePreset(val, config.DateTimeFormatPresets)
+			if err := config.ValidateTimeLayout(val); err != nil {
+				return fmt.Errorf("datetime_format: %w", err)
+			}
+			c.DateTimeFormat = val
+			return nil
+		},
+	},
 	"focus.work_duration_min": {
 		description: "Work session duration in minutes (1–120)",
 		get:         func(c config.Config) string { return strconv.Itoa(c.Focus.WorkDuration) },
@@ -134,6 +170,9 @@ var configKeys = map[string]configKey{
 // orderedConfigKeys defines the display order for config list.
 var orderedConfigKeys = []string{
 	"panel_ratio",
+	"date_format",
+	"time_format",
+	"datetime_format",
 	"focus.work_duration_min",
 	"focus.short_break_duration_min",
 	"focus.long_break_duration_min",
@@ -259,7 +298,12 @@ func (c *CLI) configSetCmd() *cobra.Command {
 			}
 
 			p := c.printer(os.Stdout)
-			p.Success("Set %s = %s", key, val)
+			stored := kd.get(cfg)
+			if stored != val {
+				p.Success("Set %s = %s (resolved: %s)", key, val, stored)
+			} else {
+				p.Success("Set %s = %s", key, val)
+			}
 			return nil
 		},
 	}

@@ -93,7 +93,7 @@ func (c *CLI) timelogListCmd() *cobra.Command {
 			rows := make([][]string, 0, len(logs))
 			for _, l := range logs {
 				rows = append(rows, []string{
-					l.LoggedAt.Format("2006-01-02"),
+					c.cfg.FormatDate(l.LoggedAt),
 					task.FormatDuration(l.Duration),
 					l.Note,
 				})
