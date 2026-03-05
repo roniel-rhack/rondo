@@ -48,7 +48,7 @@ func (c *CLI) focusStartCmd() *cobra.Command {
 				return fmt.Errorf("invalid duration: %w", err)
 			}
 
-			now := time.Now()
+			now := time.Now().UTC()
 			sess := &focus.Session{
 				TaskID:    taskID,
 				Duration:  dur,

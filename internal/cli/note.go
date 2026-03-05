@@ -38,7 +38,10 @@ func (c *CLI) noteAddCmd() *cobra.Command {
 			if _, err := c.getTaskOrNotFound(taskID); err != nil {
 				return err
 			}
-			body := args[1]
+			body := strings.TrimSpace(args[1])
+			if body == "" {
+				return fmt.Errorf("note body cannot be empty")
+			}
 			if err := c.taskStore.AddNote(taskID, body); err != nil {
 				return fmt.Errorf("add note: %w", err)
 			}
@@ -86,7 +89,7 @@ func (c *CLI) noteListCmd() *cobra.Command {
 			for _, n := range notes {
 				rows = append(rows, []string{
 					strconv.FormatInt(n.ID, 10),
-					n.CreatedAt.Format("2006-01-02 15:04"),
+					c.cfg.FormatDateTime(n.CreatedAt),
 					n.Body,
 				})
 			}

@@ -129,6 +129,9 @@ type Model struct {
 	notesFocused bool
 	noteFormData *ui.NoteFormData
 
+	// Delete guard (TUI).
+	deleteGuardConfirmed bool
+
 	// Focus settings form.
 	focusSettingsFormData *ui.FocusSettingsData
 
@@ -630,7 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dueStr = selected.DueDate.Format(time.DateOnly)
 			}
 			recurFreq := selected.RecurFreq.String()
-			// Format metadata as "key=value, key2=value2".
+			// Format metadata as newline-delimited "key=value" pairs.
 			var metaParts []string
 			for k, v := range selected.Metadata {
 				metaParts = append(metaParts, k+"="+v)
@@ -647,7 +650,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				DueDate:     dueStr,
 				Tags:        strings.Join(selected.Tags, ", "),
 				RecurFreq:   recurFreq,
-				Metadata:    strings.Join(metaParts, ", "),
+				Metadata:    strings.Join(metaParts, "\n"),
 				Blocks:      strings.Join(blocksParts, ", "),
 			}
 			m.form = ui.EditTaskForm(m.formData)
@@ -943,7 +946,18 @@ func (m Model) View() string {
 		if selected != nil {
 			title = selected.Title
 		}
-		dialog := ui.RenderConfirmDialogBox("Delete Task?", fmt.Sprintf("Delete \"%s\"?", title))
+		var dialog string
+		if m.deleteGuardConfirmed {
+			blocksIDs, _ := m.store.ListBlocksIDs(selected.ID)
+			idStrs := make([]string, len(blocksIDs))
+			for i, bid := range blocksIDs {
+				idStrs[i] = fmt.Sprintf("#%d", bid)
+			}
+			dialog = ui.RenderConfirmDialogBox("Delete Blocking Task?",
+				fmt.Sprintf("Task blocks %s.\nDelete and unblock them?", strings.Join(idStrs, ", ")), ui.Yellow)
+		} else {
+			dialog = ui.RenderConfirmDialogBox("Delete Task?", fmt.Sprintf("Delete \"%s\"?", title))
+		}
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog,
 			lipgloss.WithWhitespaceChars(" "),
 			lipgloss.WithWhitespaceForeground(ui.OverlayDim))
@@ -1037,6 +1051,8 @@ func (m *Model) switchTab() {
 	m.focusedPanel = 0
 	m.subtaskIdx = 0
 	m.entryIdx = 0
+	m.notesFocused = false
+	m.noteIdx = 0
 	if m.activeTab != 3 {
 		m.refreshList()
 		m.updateDetail()

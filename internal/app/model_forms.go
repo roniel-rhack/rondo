@@ -266,10 +266,11 @@ func (m *Model) updateConfirmDeleteNote(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
 }
 
 func (m *Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -277,6 +278,13 @@ func (m *Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		selected := m.selectedTask()
 		if selected != nil {
+			// Check if this task blocks others.
+			blocksIDs, _ := m.store.ListBlocksIDs(selected.ID)
+			if len(blocksIDs) > 0 && !m.deleteGuardConfirmed {
+				// Show blocker warning and require second confirmation.
+				m.deleteGuardConfirmed = true
+				return m, nil
+			}
 			// Capture for undo.
 			deletedTask := *selected
 			m.undoAction = &undoAction{
@@ -286,8 +294,10 @@ func (m *Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				},
 			}
 			if err := m.store.Delete(selected.ID); err != nil {
+				m.deleteGuardConfirmed = false
 				return m, m.setError(err)
 			}
+			m.deleteGuardConfirmed = false
 			if err := m.reload(); err != nil {
 				m.mode = modeNormal
 				return m, m.setError(err)
@@ -297,6 +307,7 @@ func (m *Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.setStatus("Task deleted")
 	case "n", "N", "esc":
 		m.mode = modeNormal
+		m.deleteGuardConfirmed = false
 	}
 	return m, nil
 }
@@ -375,10 +386,10 @@ func (m *Model) submitTaskForm() tea.Cmd {
 
 	recurFreq := task.ParseRecurFreq(m.formData.RecurFreq)
 
-	// Parse metadata.
+	// Parse metadata (newline-delimited key=value pairs).
 	metadata := make(map[string]string)
 	if m.formData.Metadata != "" {
-		for _, pair := range strings.Split(m.formData.Metadata, ",") {
+		for _, pair := range strings.Split(m.formData.Metadata, "\n") {
 			pair = strings.TrimSpace(pair)
 			if pair == "" {
 				continue
@@ -429,12 +440,20 @@ func (m *Model) submitTaskForm() tea.Cmd {
 				_ = m.store.UpdateRecurrence(t.ID, recurFreq, 1)
 			}
 			if len(blocksIDs) > 0 {
-				// This task blocks the listed tasks.
+				var blockerErrs []string
 				for _, blockedID := range blocksIDs {
-					_ = m.store.SetBlocker(blockedID, t.ID)
+					if err := m.store.SetBlocker(blockedID, t.ID); err != nil {
+						blockerErrs = append(blockerErrs, fmt.Sprintf("#%d: %s", blockedID, err))
+					}
 				}
+				if len(blockerErrs) > 0 {
+					statusCmd = m.setStatus(fmt.Sprintf("Task created (blocker warnings: %s)", strings.Join(blockerErrs, "; ")))
+				} else {
+					statusCmd = m.setStatus("Task created")
+				}
+			} else {
+				statusCmd = m.setStatus("Task created")
 			}
-			statusCmd = m.setStatus("Task created")
 		}
 	case modeEdit:
 		selected := m.selectedTask()
@@ -453,17 +472,11 @@ func (m *Model) submitTaskForm() tea.Cmd {
 				statusCmd = m.setError(err)
 			} else {
 				_ = m.store.UpdateRecurrence(selected.ID, recurFreq, selected.RecurInterval)
-				// Update blocks: clear old, set new.
-				// "Blocks" means this task blocks the listed task IDs.
-				// First remove old "blocks" relationships where this task was the blocker.
-				oldBlocks := selected.BlocksIDs
-				for _, bid := range oldBlocks {
-					_ = m.store.RemoveBlocker(bid, selected.ID)
+				if err := m.store.SetBlocksIDs(selected.ID, blocksIDs); err != nil {
+					statusCmd = m.setStatus(fmt.Sprintf("Task updated (blocker error: %s)", err))
+				} else {
+					statusCmd = m.setStatus("Task updated")
 				}
-				for _, blockedID := range blocksIDs {
-					_ = m.store.SetBlocker(blockedID, selected.ID)
-				}
-				statusCmd = m.setStatus("Task updated")
 			}
 		}
 	}

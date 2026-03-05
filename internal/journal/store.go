@@ -153,7 +153,7 @@ func (s *Store) GetOrCreate(dateStr string) (*Note, error) {
 
 // GetOrCreateToday returns today's note, creating it if it does not exist.
 func (s *Store) GetOrCreateToday() (*Note, error) {
-	return s.GetOrCreate(time.Now().UTC().Format(time.DateOnly))
+	return s.GetOrCreate(time.Now().Format(time.DateOnly))
 }
 
 // AddEntry appends a new entry to the given note.

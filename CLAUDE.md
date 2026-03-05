@@ -42,7 +42,7 @@ modernc.org/sqlite v1.46.1
 - **Tags**: Comma-separated tag support
 - **Recurring Tasks**: Daily, weekly, monthly, or yearly recurrence; auto-spawns next occurrence on completion
 - **Task Dependencies**: Block tasks by other task IDs; CLI via `--blocks` flag on `add`/`edit`, `--clear-blocks` on `edit`
-- **Delete Guard**: Refuses to delete tasks that block others (exit code 1); `--cascade` to confirm
+- **Delete Guard**: Refuses to delete tasks that block others; CLI returns exit code 1 unless `--cascade`; TUI shows yellow warning dialog requiring double-confirm
 - **Self-Block Guard**: Store-level rejection of self-referential dependencies
 - **Metadata**: Structured key-value pairs (`--meta key=value`) stored as JSON; filterable with AND logic via `rondo list --meta key=value`
 - **Time Logging**: Log time spent on tasks with optional notes
@@ -222,17 +222,18 @@ The app uses a mode enum to track UI state:
 - **`reload()` / `reloadJournal()`** return errors, callers handle them
 - **Cursor tracking**: `subtaskIdx` for task detail, `entryIdx` for journal entries
 - **Confirm dialogs**: `ui.RenderConfirmDialogBox` with variadic border color
-- **Batch queries**: Journal entries loaded with `WHERE note_id IN (...)` (no N+1)
+- **Batch queries**: `List()` batch-loads all 6 relations (subtasks, tags, time logs, notes, blockerIDs, blocksIDs) using `WHERE IN` queries (7 total vs 6N+1); journal entries loaded similarly
 - **Transactions**: All multi-statement writes use `db.Begin()`/`tx.Commit()`
 - **Date parsing**: `time.ParseInLocation` for date-only fields (timezone-correct)
 - **Printer pattern**: `cli/output.go` — `Printer` struct with `noColor`/`quiet` flags; methods: `Table()`, `Success()`, `Bold()`, `Dim()`, `Colored()`, `JSON()`
 - **TTY detection**: `isTTY()` via `go-isatty` (not `ModeCharDevice`); auto-disables color when piped unless `--no-color` explicitly set
 - **Styled tables**: lipgloss/table with `RoundedBorder()` when TTY, tabwriter fallback when piped; `writerWidth()` constrains to terminal width
-- **Batch mode**: `rondo batch` reads newline-delimited JSON from stdin; creates a fresh cobra command tree per invocation to prevent flag state leaking
-- **UTC timestamps**: All `time.Now()` calls use `.UTC()`; all date parsing uses `time.UTC` (not `time.Local`)
+- **Batch mode**: `rondo batch` reads newline-delimited JSON from stdin; creates a fresh cobra command tree per invocation to prevent flag state leaking; sub-command stdout/stderr suppressed (only JSON results emitted); rejects nested `batch` commands
+- **UTC timestamps**: Storage timestamps (`created_at`, `updated_at`, focus sessions) use `.UTC()`; user-facing date operations (journal `DateTitle()`, `GetOrCreateToday()`, `parseJournalDate()`) use local time
 - **Metadata storage**: JSON `TEXT` column with `marshalMetadata()`/`parseMetadata()` helpers; `addColumnIfNotExists()` migration
-- **Blocker enrichment**: JSON output for `blocked_by`/`blocks` contains `{id, title, status}` objects (not bare IDs); resolved via `taskIndex` lookup
-- **Delete guard**: CLI checks `ListBlocksIDs()` before delete; exit code 1 + error listing blocked tasks unless `--cascade` is passed
+- **Blocker enrichment**: JSON output has `blocked_by`/`blocks` as `[]int64` (backward compat) plus `blocked_by_detail`/`blocks_detail` as `[]{id, title, status}` objects; resolved via `taskIndex` lookup
+- **Delete guard**: CLI checks `ListBlocksIDs()` before delete; exit code 1 + error listing blocked tasks unless `--cascade` is passed; TUI uses `deleteGuardConfirmed` flag for two-step confirmation with yellow border
+- **Transactional blockers**: `SetBlocksIDs()` replaces all tasks a blocker blocks in a single transaction; used by both TUI and CLI edit paths
 
 ### SQLite Schema
 Database at `~/.todo-app/todo.db` with tables:

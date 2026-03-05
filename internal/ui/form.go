@@ -99,10 +99,11 @@ func NewTaskForm(data *TaskFormData) *huh.Form {
 				).
 				Value(&data.RecurFreq),
 
-			huh.NewInput().
+			huh.NewText().
 				Title("Metadata").
-				Placeholder("key=value, key2=value2").
-				Value(&data.Metadata),
+				Placeholder("key=value (one per line)").
+				Value(&data.Metadata).
+				Lines(3),
 
 			huh.NewInput().
 				Title("Blocks (task IDs)").
@@ -159,10 +160,11 @@ func EditTaskForm(data *TaskFormData) *huh.Form {
 				).
 				Value(&data.RecurFreq),
 
-			huh.NewInput().
+			huh.NewText().
 				Title("Metadata").
-				Placeholder("key=value, key2=value2").
-				Value(&data.Metadata),
+				Placeholder("key=value (one per line)").
+				Value(&data.Metadata).
+				Lines(3),
 
 			huh.NewInput().
 				Title("Blocks (task IDs)").

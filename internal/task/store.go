@@ -60,6 +60,7 @@ func migrate(db *sql.DB) error {
 			blocked_by INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
 			PRIMARY KEY (task_id, blocked_by)
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_deps_blocked_by ON task_dependencies(blocked_by)`,
 		`CREATE TABLE IF NOT EXISTS task_notes (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -158,25 +159,45 @@ func (s *Store) List() ([]Task, error) {
 		return nil, err
 	}
 
+	// Collect task IDs for batch loading.
+	taskIDs := make([]int64, len(tasks))
 	for i := range tasks {
-		if tasks[i].Subtasks, err = s.listSubtasks(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list subtasks for task %d: %w", tasks[i].ID, err)
-		}
-		if tasks[i].Tags, err = s.listTags(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list tags for task %d: %w", tasks[i].ID, err)
-		}
-		if tasks[i].TimeLogs, err = s.ListTimeLogs(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list time logs for task %d: %w", tasks[i].ID, err)
-		}
-		if tasks[i].Notes, err = s.ListNotes(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list notes for task %d: %w", tasks[i].ID, err)
-		}
-		if tasks[i].BlockedByIDs, err = s.ListBlockerIDs(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list blocker ids for task %d: %w", tasks[i].ID, err)
-		}
-		if tasks[i].BlocksIDs, err = s.ListBlocksIDs(tasks[i].ID); err != nil {
-			return nil, fmt.Errorf("list blocks ids for task %d: %w", tasks[i].ID, err)
-		}
+		taskIDs[i] = tasks[i].ID
+	}
+
+	// Batch-load all relations (7 queries total instead of 6N+1).
+	allSubtasks, err := s.listAllSubtasks(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list subtasks: %w", err)
+	}
+	allTags, err := s.listAllTags(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list tags: %w", err)
+	}
+	allTimeLogs, err := s.listAllTimeLogs(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list time logs: %w", err)
+	}
+	allNotes, err := s.listAllNotes(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list notes: %w", err)
+	}
+	allBlockerIDs, err := s.listAllBlockerIDs(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list blocker ids: %w", err)
+	}
+	allBlocksIDs, err := s.listAllBlocksIDs(taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch list blocks ids: %w", err)
+	}
+
+	for i := range tasks {
+		tasks[i].Subtasks = allSubtasks[tasks[i].ID]
+		tasks[i].Tags = allTags[tasks[i].ID]
+		tasks[i].TimeLogs = allTimeLogs[tasks[i].ID]
+		tasks[i].Notes = allNotes[tasks[i].ID]
+		tasks[i].BlockedByIDs = allBlockerIDs[tasks[i].ID]
+		tasks[i].BlocksIDs = allBlocksIDs[tasks[i].ID]
 	}
 	return tasks, nil
 }
@@ -213,6 +234,159 @@ func (s *Store) listTags(taskID int64) ([]string, error) {
 		tags = append(tags, name)
 	}
 	return tags, rows.Err()
+}
+
+// placeholders returns a comma-separated list of "?" placeholders and the args slice.
+func placeholders(ids []int64) (string, []any) {
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	return strings.Join(ph, ","), args
+}
+
+func (s *Store) listAllSubtasks(taskIDs []int64) (map[int64][]Subtask, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT id, task_id, title, completed, position FROM subtasks WHERE task_id IN (`+ph+`) ORDER BY position`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]Subtask)
+	for rows.Next() {
+		var st Subtask
+		var tid int64
+		if err := rows.Scan(&st.ID, &tid, &st.Title, &st.Completed, &st.Position); err != nil {
+			return nil, err
+		}
+		m[tid] = append(m[tid], st)
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) listAllTags(taskIDs []int64) (map[int64][]string, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT task_id, name FROM tags WHERE task_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]string)
+	for rows.Next() {
+		var tid int64
+		var name string
+		if err := rows.Scan(&tid, &name); err != nil {
+			return nil, err
+		}
+		m[tid] = append(m[tid], name)
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) listAllTimeLogs(taskIDs []int64) (map[int64][]TimeLog, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT id, task_id, duration, note, logged_at FROM time_logs WHERE task_id IN (`+ph+`) ORDER BY logged_at DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]TimeLog)
+	for rows.Next() {
+		var tl TimeLog
+		var dur int64
+		var loggedAt string
+		if err := rows.Scan(&tl.ID, &tl.TaskID, &dur, &tl.Note, &loggedAt); err != nil {
+			return nil, err
+		}
+		tl.Duration = time.Duration(dur)
+		parsed, err := time.Parse(time.RFC3339, loggedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse time_log logged_at %q: %w", loggedAt, err)
+		}
+		tl.LoggedAt = parsed
+		m[tl.TaskID] = append(m[tl.TaskID], tl)
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) listAllNotes(taskIDs []int64) (map[int64][]TaskNote, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT id, task_id, body, created_at FROM task_notes WHERE task_id IN (`+ph+`) ORDER BY created_at ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]TaskNote)
+	for rows.Next() {
+		var n TaskNote
+		var createdAt string
+		if err := rows.Scan(&n.ID, &n.TaskID, &n.Body, &createdAt); err != nil {
+			return nil, err
+		}
+		parsed, err := time.Parse(time.RFC3339, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse task_note created_at %q: %w", createdAt, err)
+		}
+		n.CreatedAt = parsed
+		m[n.TaskID] = append(m[n.TaskID], n)
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) listAllBlockerIDs(taskIDs []int64) (map[int64][]int64, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT task_id, blocked_by FROM task_dependencies WHERE task_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]int64)
+	for rows.Next() {
+		var tid, bid int64
+		if err := rows.Scan(&tid, &bid); err != nil {
+			return nil, err
+		}
+		m[tid] = append(m[tid], bid)
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) listAllBlocksIDs(taskIDs []int64) (map[int64][]int64, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholders(taskIDs)
+	rows, err := s.db.Query(`SELECT blocked_by, task_id FROM task_dependencies WHERE blocked_by IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]int64)
+	for rows.Next() {
+		var blockerID, tid int64
+		if err := rows.Scan(&blockerID, &tid); err != nil {
+			return nil, err
+		}
+		m[blockerID] = append(m[blockerID], tid)
+	}
+	return m, rows.Err()
 }
 
 func (s *Store) Create(t *Task) error {
@@ -471,12 +645,6 @@ func (s *Store) ListBlocksIDs(taskID int64) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-// ClearBlockers removes all blockers from a task.
-func (s *Store) ClearBlockers(taskID int64) error {
-	_, err := s.db.Exec(`DELETE FROM task_dependencies WHERE task_id = ?`, taskID)
-	return err
-}
-
 // SetBlockers replaces all blockers for a task with the given IDs.
 func (s *Store) SetBlockers(taskID int64, blockerIDs []int64) error {
 	tx, err := s.db.Begin()
@@ -489,9 +657,37 @@ func (s *Store) SetBlockers(taskID int64, blockerIDs []int64) error {
 		return err
 	}
 	for _, bid := range blockerIDs {
+		if bid == taskID {
+			continue // self-block guard
+		}
 		if _, err := tx.Exec(
 			`INSERT OR IGNORE INTO task_dependencies (task_id, blocked_by) VALUES (?,?)`,
 			taskID, bid,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetBlocksIDs replaces all tasks that blockerID blocks with the given blockedIDs.
+func (s *Store) SetBlocksIDs(blockerID int64, blockedIDs []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM task_dependencies WHERE blocked_by = ?`, blockerID); err != nil {
+		return err
+	}
+	for _, tid := range blockedIDs {
+		if tid == blockerID {
+			continue // self-block guard
+		}
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO task_dependencies (task_id, blocked_by) VALUES (?,?)`,
+			tid, blockerID,
 		); err != nil {
 			return err
 		}

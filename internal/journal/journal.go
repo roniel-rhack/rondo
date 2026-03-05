@@ -17,8 +17,8 @@ type Note struct {
 
 // DateTitle returns the human-readable date string used as the note title.
 func (n Note) DateTitle() string {
-	now := time.Now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	yesterday := today.AddDate(0, 0, -1)
 	weekAgo := today.AddDate(0, 0, -6)
 

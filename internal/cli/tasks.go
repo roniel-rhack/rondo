@@ -76,6 +76,9 @@ func parseBlocksFlag(s string) ([]int64, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid task ID %q in --blocks: %w", p, err)
 		}
+		if id <= 0 {
+			return nil, fmt.Errorf("invalid task ID %q in --blocks: must be positive", p)
+		}
 		ids = append(ids, id)
 	}
 	return ids, nil
@@ -334,35 +337,16 @@ func (c *CLI) editCmd() *cobra.Command {
 			}
 
 			if clearBlocks {
-				// Clear all tasks that this task blocks
-				blocksIDs, err := c.taskStore.ListBlocksIDs(id)
-				if err != nil {
-					return fmt.Errorf("list blocks: %w", err)
-				}
-				for _, bid := range blocksIDs {
-					if err := c.taskStore.RemoveBlocker(bid, id); err != nil {
-						return fmt.Errorf("remove blocker: %w", err)
-					}
+				if err := c.taskStore.SetBlocksIDs(id, nil); err != nil {
+					return fmt.Errorf("clear blocks: %w", err)
 				}
 			} else if cmd.Flags().Changed("blocks") {
-				// Replace: clear existing blocks, set new ones
-				blocksIDs, err := c.taskStore.ListBlocksIDs(id)
-				if err != nil {
-					return fmt.Errorf("list blocks: %w", err)
-				}
-				for _, bid := range blocksIDs {
-					if err := c.taskStore.RemoveBlocker(bid, id); err != nil {
-						return fmt.Errorf("remove blocker: %w", err)
-					}
-				}
 				newBlocks, err := parseBlocksFlag(blocks)
 				if err != nil {
 					return err
 				}
-				for _, bid := range newBlocks {
-					if err := c.taskStore.SetBlocker(bid, id); err != nil {
-						return fmt.Errorf("set blocker: %w", err)
-					}
+				if err := c.taskStore.SetBlocksIDs(id, newBlocks); err != nil {
+					return fmt.Errorf("set blocks: %w", err)
 				}
 			}
 
@@ -825,9 +809,14 @@ func (c *CLI) printTaskDetail(p *Printer, t *task.Task) error {
 
 	meta := "-"
 	if len(t.Metadata) > 0 {
+		keys := make([]string, 0, len(t.Metadata))
+		for k := range t.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		var pairs []string
-		for k, v := range t.Metadata {
-			pairs = append(pairs, k+"="+v)
+		for _, k := range keys {
+			pairs = append(pairs, k+"="+t.Metadata[k])
 		}
 		meta = strings.Join(pairs, ", ")
 	}
@@ -927,23 +916,25 @@ type jsonTaskRef struct {
 }
 
 type jsonTask struct {
-	ID          int64             `json:"id"`
-	Title       string            `json:"title"`
-	Description string            `json:"description,omitempty"`
-	Status      string            `json:"status"`
-	Priority    string            `json:"priority"`
-	DueDate     string            `json:"due_date,omitempty"`
-	Tags        []string          `json:"tags"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	Recurrence  string            `json:"recurrence,omitempty"`
-	Subtasks    []jsonSubtask     `json:"subtasks"`
-	TimeLogs    []jsonTimeLog     `json:"time_logs"`
-	NoteCount   int              `json:"note_count"`
-	Notes       []jsonTaskNote   `json:"notes"`
-	BlockedBy   []jsonTaskRef     `json:"blocked_by"`
-	Blocks      []jsonTaskRef     `json:"blocks"`
-	CreatedAt   string            `json:"created_at"`
-	UpdatedAt   string            `json:"updated_at"`
+	ID              int64             `json:"id"`
+	Title           string            `json:"title"`
+	Description     string            `json:"description,omitempty"`
+	Status          string            `json:"status"`
+	Priority        string            `json:"priority"`
+	DueDate         string            `json:"due_date,omitempty"`
+	Tags            []string          `json:"tags"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	Recurrence      string            `json:"recurrence,omitempty"`
+	Subtasks        []jsonSubtask     `json:"subtasks"`
+	TimeLogs        []jsonTimeLog     `json:"time_logs"`
+	NoteCount       int               `json:"note_count"`
+	Notes           []jsonTaskNote    `json:"notes"`
+	BlockedBy       []int64           `json:"blocked_by"`
+	BlockedByDetail []jsonTaskRef     `json:"blocked_by_detail"`
+	Blocks          []int64           `json:"blocks"`
+	BlocksDetail    []jsonTaskRef     `json:"blocks_detail"`
+	CreatedAt       string            `json:"created_at"`
+	UpdatedAt       string            `json:"updated_at"`
 }
 
 // taskIndex maps task IDs to their summary info for enriching dependency refs.
@@ -1017,8 +1008,16 @@ func taskToJSON(t *task.Task, idx taskIndex) jsonTask {
 			CreatedAt: n.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	jt.BlockedBy = resolveRefs(t.BlockedByIDs, idx)
-	jt.Blocks = resolveRefs(t.BlocksIDs, idx)
+	jt.BlockedBy = t.BlockedByIDs
+	if jt.BlockedBy == nil {
+		jt.BlockedBy = []int64{}
+	}
+	jt.BlockedByDetail = resolveRefs(t.BlockedByIDs, idx)
+	jt.Blocks = t.BlocksIDs
+	if jt.Blocks == nil {
+		jt.Blocks = []int64{}
+	}
+	jt.BlocksDetail = resolveRefs(t.BlocksIDs, idx)
 	return jt
 }
 
@@ -1034,16 +1033,24 @@ func printTasksJSON(w io.Writer, tasks []task.Task) error {
 }
 
 func (c *CLI) printTaskJSON(w io.Writer, t *task.Task) error {
-	// For single-task view, build index from all tasks for ref resolution.
-	allTasks, err := c.taskStore.List()
-	if err != nil {
-		// Fallback: just use the task itself
-		idx := taskIndex{t.ID: {ID: t.ID, Title: t.Title, Status: t.Status.String()}}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(taskToJSON(t, idx))
+	// Build index from only referenced tasks (not all tasks).
+	idx := taskIndex{t.ID: {ID: t.ID, Title: t.Title, Status: t.Status.String()}}
+	refIDs := make(map[int64]bool)
+	for _, id := range t.BlockedByIDs {
+		refIDs[id] = true
 	}
-	idx := buildTaskIndex(allTasks)
+	for _, id := range t.BlocksIDs {
+		refIDs[id] = true
+	}
+	for id := range refIDs {
+		if id == t.ID {
+			continue
+		}
+		ref, err := c.taskStore.GetByID(id)
+		if err == nil {
+			idx[ref.ID] = jsonTaskRef{ID: ref.ID, Title: ref.Title, Status: ref.Status.String()}
+		}
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(taskToJSON(t, idx))

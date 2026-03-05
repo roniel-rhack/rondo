@@ -52,7 +52,7 @@ func (m *Model) startWork() (tea.Model, tea.Cmd) {
 		TaskID:    taskID,
 		Kind:      focus.KindWork,
 		Duration:  time.Duration(m.cfg.Focus.WorkDuration) * time.Minute,
-		StartedAt: time.Now(),
+		StartedAt: time.Now().UTC(),
 		CyclePos:  m.focusCyclePos + 1,
 	}
 	if err := m.focusStore.Create(session); err != nil {
@@ -77,7 +77,7 @@ func (m *Model) startBreak() (tea.Model, tea.Cmd) {
 	session := &focus.Session{
 		Kind:      kind,
 		Duration:  duration,
-		StartedAt: time.Now(),
+		StartedAt: time.Now().UTC(),
 	}
 	if err := m.focusStore.Create(session); err != nil {
 		return m, m.setError(err)

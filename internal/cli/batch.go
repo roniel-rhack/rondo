@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -51,9 +52,16 @@ Output is a JSON array of results.`,
 					continue
 				}
 
+				if bc.Cmd == "batch" {
+					results = append(results, batchResult{Cmd: bc.Cmd, OK: false, Error: "batch cannot be nested"})
+					continue
+				}
+
 				// Build a fresh command tree for each command to avoid
 				// cobra flag state leaking between invocations.
 				fresh := New(c.taskStore, c.journalStore, c.focusStore, c.cfg)
+				fresh.SetOut(io.Discard)
+				fresh.SetErr(io.Discard)
 				fresh.SetArgs(append([]string{bc.Cmd}, bc.Args...))
 				err := fresh.Execute()
 

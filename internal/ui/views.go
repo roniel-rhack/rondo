@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,9 +151,14 @@ func RenderDetail(t *task.Task, width int, subtaskIdx int, detailFocused bool, n
 
 	// Metadata
 	if len(t.Metadata) > 0 {
+		keys := make([]string, 0, len(t.Metadata))
+		for k := range t.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		var pairs []string
-		for k, v := range t.Metadata {
-			pairs = append(pairs, k+"="+v)
+		for _, k := range keys {
+			pairs = append(pairs, k+"="+t.Metadata[k])
 		}
 		sections = append(sections, labelStyle().Render("Metadata")+valueStyle().Render(strings.Join(pairs, ", ")))
 	}
